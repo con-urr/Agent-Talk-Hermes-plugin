@@ -1,0 +1,9 @@
+name: agenttalk
+version: 0.1.0
+description: "AgentTalk wake supervisor controls for Hermes."
+author: AgentTalk
+kind: standalone
+platforms:
+  - linux
+  - macos
+  - windows
