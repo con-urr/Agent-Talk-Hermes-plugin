@@ -6,6 +6,7 @@ import unittest
 import importlib.util
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 from agenttalk_hermes_plugin import control
 
@@ -65,7 +66,40 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(agent["kind"], "hermes")
         self.assertFalse(agent["enabled"])
         self.assertFalse(agent["wake"]["enabled"])
+        self.assertEqual(agent["wake"]["accessMode"], "allow_list")
+        self.assertEqual(agent["wake"]["allowedWakeSenderAgentIds"], [])
+        self.assertEqual(agent["wake"]["blockedWakeSenderAgentIds"], [])
         self.assertFalse(config["defaultWakePolicy"]["wakeOnDirectMessage"])
+
+    def test_wake_access_lists_are_configurable(self) -> None:
+        control.ensure_agent_config()
+
+        result = control.set_wake_access(
+            allowed_wake_sender_agent_ids="agent-a, agent-b\nagent-a",
+            blocked_wake_sender_agent_ids=["agent-c"],
+        )
+
+        self.assertEqual(result["wakeAccess"]["mode"], "allow_list")
+        self.assertEqual(result["wakeAccess"]["allowedWakeSenderAgentIds"], ["agent-a", "agent-b"])
+        self.assertEqual(result["wakeAccess"]["blockedWakeSenderAgentIds"], ["agent-c"])
+
+        cleared = control.set_wake_access(allowed_wake_sender_agent_ids="")
+        self.assertEqual(cleared["wakeAccess"]["mode"], "allow_list")
+        self.assertEqual(cleared["wakeAccess"]["allowedWakeSenderAgentIds"], [])
+        self.assertEqual(cleared["wakeAccess"]["blockedWakeSenderAgentIds"], ["agent-c"])
+
+    def test_open_wake_requires_confirmation(self) -> None:
+        control.ensure_agent_config()
+
+        with self.assertRaises(ValueError):
+            control.set_wake_access(wake_access_mode="open")
+
+        opened = control.set_wake_access(
+            wake_access_mode="open",
+            open_wake_risk_accepted=True,
+            allowed_wake_sender_agent_ids="",
+        )
+        self.assertEqual(opened["wakeAccess"]["mode"], "open")
 
     def test_agent_and_wake_are_separate_toggles(self) -> None:
         control.ensure_agent_config()
@@ -79,6 +113,7 @@ class ControlTests(unittest.TestCase):
         self.assertTrue(wake_on["agentEnabled"])
         self.assertTrue(wake_on["wakeEnabled"])
         self.assertTrue(wake_on["wakeActive"])
+        self.assertEqual(wake_on["wakeAccess"]["mode"], "allow_list")
 
         wake_off = control.set_wake_enabled(False)
         self.assertTrue(wake_off["agentEnabled"])
@@ -88,6 +123,13 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(off["agentEnabled"])
         self.assertFalse(off["wakeEnabled"])
         self.assertFalse(off["wakeActive"])
+
+    def test_pid_running_treats_runtime_probe_errors_as_not_running(self) -> None:
+        with (
+            patch.object(control.sys, "platform", "linux"),
+            patch.object(control.os, "kill", side_effect=SystemError("invalid handle")),
+        ):
+            self.assertFalse(control._pid_running(12345))
 
 
 if __name__ == "__main__":

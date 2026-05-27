@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -13,6 +14,11 @@ PLUGIN_ID = "agenttalk-hermes"
 AGENT_NAME = "research"
 AGENT_HANDLE = "research-agent"
 AGENT_KIND = "hermes"
+OPEN_WAKE_WARNING = (
+    "Careful: you are about to expose this agent to open wake requests from any AgentTalk sender who can deliver "
+    "a message. This is generally inadvisable unless you have hardened the runtime and limited the blast radius "
+    "of malicious actors attempting to influence or control your agents."
+)
 
 
 def _home() -> Path:
@@ -43,6 +49,61 @@ def pid_path() -> Path:
 
 def default_state_dir() -> Path:
     return _home() / ".agenttalk" / "agents" / AGENT_NAME
+
+
+def normalize_wake_sender_agent_ids(value: Any, field: str = "wake sender agent IDs") -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return []
+        if trimmed.startswith("["):
+            parsed = json.loads(trimmed)
+            if not isinstance(parsed, list) or any(not isinstance(item, str) for item in parsed):
+                raise ValueError(f"{field} must be a comma/newline-separated list or JSON array of strings")
+            items = parsed
+        else:
+            items = re.split(r"[\s,]+", trimmed)
+    elif isinstance(value, list):
+        if any(not isinstance(item, str) for item in value):
+            raise ValueError(f"{field} must contain only strings")
+        items = value
+    else:
+        raise ValueError(f"{field} must be a list or string")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        agent_id = item.strip()
+        if not agent_id:
+            continue
+        if len(agent_id) > 256 or re.search(r"[\s,]", agent_id):
+            raise ValueError(f"{field} must contain AgentTalk agent IDs without whitespace or commas")
+        if agent_id not in seen:
+            normalized.append(agent_id)
+            seen.add(agent_id)
+    if len(normalized) > 100:
+        raise ValueError(f"{field} must contain 100 or fewer agent IDs")
+    return normalized
+
+
+def normalize_wake_access_mode(value: Any = None) -> str:
+    if value is None:
+        return "allow_list"
+    if not isinstance(value, str):
+        raise ValueError("wake access mode must be allow-list or open")
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in ("", "allow_list", "allowlist"):
+        return "allow_list"
+    if normalized in ("open", "open_wake", "any_sender"):
+        return "open"
+    raise ValueError("wake access mode must be allow-list or open")
+
+
+def require_open_wake_confirmation(accepted: bool | None) -> None:
+    if not accepted:
+        raise ValueError(f"{OPEN_WAKE_WARNING} Confirm open wake mode before saving.")
 
 
 def _default_config() -> dict[str, Any]:
@@ -112,7 +173,15 @@ def find_hermes_repo(explicit_repo: str | None = None) -> str | None:
     return str(_expand(explicit_repo)) if explicit_repo else None
 
 
-def _new_agent(repo: str | None, *, enabled: bool, wake_enabled: bool) -> dict[str, Any]:
+def _new_agent(
+    repo: str | None,
+    *,
+    enabled: bool,
+    wake_enabled: bool,
+    wake_access_mode: Any = None,
+    allowed_wake_sender_agent_ids: Any = None,
+    blocked_wake_sender_agent_ids: Any = None,
+) -> dict[str, Any]:
     return {
         "name": AGENT_NAME,
         "handle": AGENT_HANDLE,
@@ -125,9 +194,16 @@ def _new_agent(repo: str | None, *, enabled: bool, wake_enabled: bool) -> dict[s
         "connectorTimeoutMs": 300000,
         "wake": {
             "enabled": wake_enabled,
+            "accessMode": normalize_wake_access_mode(wake_access_mode),
             "latencyMs": 5000,
             "statusText": "Hermes AgentTalk ready",
             "reasons": ["direct_message", "mention"],
+            "allowedWakeSenderAgentIds": normalize_wake_sender_agent_ids(
+                allowed_wake_sender_agent_ids, "Allowed wake senders"
+            ),
+            "blockedWakeSenderAgentIds": normalize_wake_sender_agent_ids(
+                blocked_wake_sender_agent_ids, "Blocked wake senders"
+            ),
         },
     }
 
@@ -137,18 +213,41 @@ def ensure_agent_config(
     repo: str | None = None,
     enabled: bool = False,
     wake_enabled: bool = False,
+    wake_access_mode: Any = None,
+    open_wake_risk_accepted: bool | None = None,
+    allowed_wake_sender_agent_ids: Any = None,
+    blocked_wake_sender_agent_ids: Any = None,
     force: bool = False,
 ) -> dict[str, Any]:
     config = load_config()
+    access_mode = normalize_wake_access_mode(wake_access_mode)
+    if access_mode == "open":
+        require_open_wake_confirmation(open_wake_risk_accepted)
     resolved_repo = find_hermes_repo(repo)
     agents = config.setdefault("agents", [])
     index = next((i for i, row in enumerate(agents) if row.get("name") == AGENT_NAME), -1)
     if index < 0:
-        agents.append(_new_agent(resolved_repo, enabled=enabled, wake_enabled=wake_enabled))
+        agents.append(
+            _new_agent(
+                resolved_repo,
+                enabled=enabled,
+                wake_enabled=wake_enabled,
+                wake_access_mode=access_mode,
+                allowed_wake_sender_agent_ids=allowed_wake_sender_agent_ids,
+                blocked_wake_sender_agent_ids=blocked_wake_sender_agent_ids,
+            )
+        )
     else:
         agent = agents[index]
         if force or agent.get("kind") != AGENT_KIND:
-            agents[index] = _new_agent(resolved_repo, enabled=enabled, wake_enabled=wake_enabled)
+            agents[index] = _new_agent(
+                resolved_repo,
+                enabled=enabled,
+                wake_enabled=wake_enabled,
+                wake_access_mode=access_mode,
+                allowed_wake_sender_agent_ids=allowed_wake_sender_agent_ids,
+                blocked_wake_sender_agent_ids=blocked_wake_sender_agent_ids,
+            )
         else:
             agent.setdefault("handle", AGENT_HANDLE)
             agent.setdefault("kind", AGENT_KIND)
@@ -157,9 +256,24 @@ def ensure_agent_config(
             agent["enabled"] = enabled
             wake = agent.setdefault("wake", {})
             wake["enabled"] = wake_enabled
+            wake["accessMode"] = access_mode
             wake.setdefault("latencyMs", 5000)
             wake.setdefault("statusText", "Hermes AgentTalk ready")
             wake.setdefault("reasons", ["direct_message", "mention"])
+            if allowed_wake_sender_agent_ids is not None:
+                wake["allowedWakeSenderAgentIds"] = normalize_wake_sender_agent_ids(
+                    allowed_wake_sender_agent_ids, "Allowed wake senders"
+                )
+                if access_mode != "open":
+                    wake["accessMode"] = "allow_list"
+            else:
+                wake.setdefault("allowedWakeSenderAgentIds", [])
+            if blocked_wake_sender_agent_ids is not None:
+                wake["blockedWakeSenderAgentIds"] = normalize_wake_sender_agent_ids(
+                    blocked_wake_sender_agent_ids, "Blocked wake senders"
+                )
+            else:
+                wake.setdefault("blockedWakeSenderAgentIds", [])
             agent.setdefault("autoInit", True)
             agent.setdefault("maxConcurrentWakeJobs", 1)
             agent.setdefault("connectorTimeoutMs", 300000)
@@ -207,6 +321,7 @@ def set_wake_enabled(enabled: bool) -> dict[str, Any]:
     assert agent is not None
     agent.setdefault("wake", {})["enabled"] = enabled
     if enabled:
+        agent.setdefault("wake", {})["accessMode"] = "allow_list"
         config["defaultWakePolicy"] = {
             **_default_config()["defaultWakePolicy"],
             **config.get("defaultWakePolicy", {}),
@@ -215,6 +330,43 @@ def set_wake_enabled(enabled: bool) -> dict[str, Any]:
             "wakeOnGroupMessage": False,
             "acceptsNewConversations": True,
         }
+    save_config(config)
+    return status()
+
+
+def set_wake_access(
+    *,
+    wake_access_mode: Any = None,
+    open_wake_risk_accepted: bool | None = None,
+    allowed_wake_sender_agent_ids: Any = None,
+    blocked_wake_sender_agent_ids: Any = None,
+) -> dict[str, Any]:
+    config = load_config()
+    agent = _agent(config)
+    if agent is None:
+        ensure_agent_config(enabled=False, wake_enabled=False)
+        config = load_config()
+        agent = _agent(config)
+    assert agent is not None
+    wake = agent.setdefault("wake", {})
+    access_mode = normalize_wake_access_mode(wake_access_mode or wake.get("accessMode"))
+    if access_mode == "open":
+        require_open_wake_confirmation(open_wake_risk_accepted)
+    wake["accessMode"] = access_mode
+    if allowed_wake_sender_agent_ids is not None:
+        wake["allowedWakeSenderAgentIds"] = normalize_wake_sender_agent_ids(
+            allowed_wake_sender_agent_ids, "Allowed wake senders"
+        )
+        if access_mode != "open":
+            wake["accessMode"] = "allow_list"
+    else:
+        wake.setdefault("allowedWakeSenderAgentIds", [])
+    if blocked_wake_sender_agent_ids is not None:
+        wake["blockedWakeSenderAgentIds"] = normalize_wake_sender_agent_ids(
+            blocked_wake_sender_agent_ids, "Blocked wake senders"
+        )
+    else:
+        wake.setdefault("blockedWakeSenderAgentIds", [])
     save_config(config)
     return status()
 
@@ -258,10 +410,29 @@ def _run_agenttalk(args: list[str]) -> dict[str, Any]:
 def _pid_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            process_query_limited_information = 0x1000
+            still_active = 259
+            handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == still_active
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
         return True
-    except OSError:
+    except (OSError, SystemError, ValueError):
         return False
 
 
@@ -332,6 +503,12 @@ def status() -> dict[str, Any]:
     config = load_config()
     agent = _agent(config)
     wake = agent.get("wake", {}) if agent else {}
+    allowed_wake_sender_agent_ids = normalize_wake_sender_agent_ids(
+        wake.get("allowedWakeSenderAgentIds"), "Allowed wake senders"
+    )
+    blocked_wake_sender_agent_ids = normalize_wake_sender_agent_ids(
+        wake.get("blockedWakeSenderAgentIds"), "Blocked wake senders"
+    )
     return {
         "ok": True,
         "plugin": PLUGIN_ID,
@@ -339,6 +516,11 @@ def status() -> dict[str, Any]:
         "agentEnabled": bool(agent and agent.get("enabled")),
         "wakeEnabled": bool(agent and wake.get("enabled")),
         "wakeActive": bool(agent and agent.get("enabled") and wake.get("enabled")),
+        "wakeAccess": {
+            "mode": normalize_wake_access_mode(wake.get("accessMode")),
+            "allowedWakeSenderAgentIds": allowed_wake_sender_agent_ids,
+            "blockedWakeSenderAgentIds": blocked_wake_sender_agent_ids,
+        },
         "supervisorRunning": supervisor_running(),
         "supervisorPid": supervisor_pid(),
         "agent": {
