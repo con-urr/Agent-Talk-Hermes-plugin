@@ -12,7 +12,17 @@ def _print(payload: dict[str, Any], *, as_json: bool = False) -> int:
         print(json.dumps(payload, indent=2))
     else:
         print(f"AgentTalk Hermes: {'ok' if payload.get('ok') else 'error'}")
-        for key in ("configured", "agentEnabled", "wakeEnabled", "wakeActive", "supervisorRunning", "supervisorPid"):
+        for key in (
+            "configured",
+            "agentTalkAgentId",
+            "registrationState",
+            "credentialScope",
+            "agentEnabled",
+            "wakeEnabled",
+            "wakeActive",
+            "supervisorRunning",
+            "supervisorPid",
+        ):
             if key in payload:
                 print(f"  {key}: {payload[key]}")
         if payload.get("error"):
@@ -25,6 +35,7 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
 
     setup = subcommands.add_parser("setup", help="Configure Hermes for AgentTalk; defaults to off")
     setup.add_argument("--repo", default=None, help="Path to the Hermes repo/runtime")
+    setup.add_argument("--handle", default=None, help="Unique AgentTalk handle for this Hermes agent")
     setup.add_argument("--enable", action="store_true", help="Enable the Hermes connector after setup")
     setup.add_argument("--wake", action="store_true", help="Enable wake after setup")
     setup.add_argument("--force", action="store_true", help="Replace existing Hermes AgentTalk config")
@@ -41,6 +52,7 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
         parser.add_argument("--json", action="store_true", help="Print JSON")
         if name == "on":
             parser.add_argument("--repo", default=None, help="Path to the Hermes repo/runtime")
+            parser.add_argument("--handle", default=None, help="Unique AgentTalk handle for this Hermes agent")
 
     wake = subcommands.add_parser("wake", help="Control only wake dispatch")
     wake_subcommands = wake.add_subparsers(dest="wake_command")
@@ -58,6 +70,7 @@ def agenttalk_command(args: argparse.Namespace) -> int:
     if command == "setup":
         payload = control.ensure_agent_config(
             repo=getattr(args, "repo", None),
+            handle=getattr(args, "handle", None),
             enabled=bool(getattr(args, "enable", False)),
             wake_enabled=bool(getattr(args, "wake", False)),
             force=bool(getattr(args, "force", False)),
@@ -68,7 +81,12 @@ def agenttalk_command(args: argparse.Namespace) -> int:
         return _print(control.status(), as_json=as_json)
 
     if command == "on":
-        control.ensure_agent_config(repo=getattr(args, "repo", None), enabled=True, wake_enabled=False)
+        control.ensure_agent_config(
+            repo=getattr(args, "repo", None),
+            handle=getattr(args, "handle", None),
+            enabled=True,
+            wake_enabled=False,
+        )
         payload = control.set_agent_enabled(True)
         payload["supervisorStart"] = control.start_supervisor()
         payload.update(control.status())
