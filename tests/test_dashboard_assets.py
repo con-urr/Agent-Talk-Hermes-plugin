@@ -21,6 +21,7 @@ class DashboardAssetTests(unittest.TestCase):
         bundle = (dashboard / manifest["entry"]).read_text(encoding="utf-8")
         self.assertIn('REGISTRY.register("agenttalk"', bundle)
         self.assertIn("AgentTalk dashboard backend is not mounted", bundle)
+        self.assertIn("/cli/install", bundle)
         self.assertNotIn("SDK.fetchJSON(API_ROOT", bundle)
 
     def test_versions_match_across_plugin_manifests(self) -> None:
@@ -42,6 +43,7 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn("name: agenttalk", text)
         self.assertIn("hermes agenttalk status --json", text)
         self.assertIn("Do not silently enable open wake", text)
+        self.assertIn("hermes agenttalk setup --json", text)
 
 
 if __name__ == "__main__":

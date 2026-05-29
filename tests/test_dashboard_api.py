@@ -97,6 +97,7 @@ class DashboardApiTests(unittest.TestCase):
         self.assertIn(("GET", "/wake-requests"), route_keys)
         self.assertIn(("POST", "/wake-requests/{request_id}/approve"), route_keys)
         self.assertIn(("POST", "/wake-requests/{request_id}/deny"), route_keys)
+        self.assertIn(("POST", "/cli/install"), route_keys)
 
     def test_setup_and_wake_default_off(self) -> None:
         api = load_plugin_api()

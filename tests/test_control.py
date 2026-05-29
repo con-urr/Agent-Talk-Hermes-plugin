@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 import importlib.util
@@ -35,11 +36,19 @@ class ControlTests(unittest.TestCase):
         self.old_handle = os.environ.get("AGENTTALK_HERMES_AGENT_HANDLE")
         self.old_busy = os.environ.get("AGENTTALK_HERMES_BUSY_COMMAND")
         self.old_busy_timeout = os.environ.get("AGENTTALK_HERMES_BUSY_COMMAND_TIMEOUT_MS")
+        self.old_cli = os.environ.get("AGENTTALK_CLI")
+        self.old_cli_home = os.environ.get("AGENTTALK_CLI_HOME")
+        self.old_cli_spec = os.environ.get("AGENTTALK_CLI_NPM_SPEC")
+        self.old_npm_command = os.environ.get("AGENTTALK_NPM_COMMAND")
         os.environ["AGENTTALK_SUPERVISOR_HOME"] = self.tmp.name
         os.environ["AGENTTALK_AGENT_STATE_HOME"] = os.path.join(self.tmp.name, "agents")
+        os.environ["AGENTTALK_CLI_HOME"] = os.path.join(self.tmp.name, "cli")
         os.environ.pop("AGENTTALK_HERMES_AGENT_HANDLE", None)
         os.environ.pop("AGENTTALK_HERMES_BUSY_COMMAND", None)
         os.environ.pop("AGENTTALK_HERMES_BUSY_COMMAND_TIMEOUT_MS", None)
+        os.environ.pop("AGENTTALK_CLI", None)
+        os.environ.pop("AGENTTALK_CLI_NPM_SPEC", None)
+        os.environ.pop("AGENTTALK_NPM_COMMAND", None)
 
     def tearDown(self) -> None:
         if self.old_home is None:
@@ -62,6 +71,22 @@ class ControlTests(unittest.TestCase):
             os.environ.pop("AGENTTALK_HERMES_BUSY_COMMAND_TIMEOUT_MS", None)
         else:
             os.environ["AGENTTALK_HERMES_BUSY_COMMAND_TIMEOUT_MS"] = self.old_busy_timeout
+        if self.old_cli is None:
+            os.environ.pop("AGENTTALK_CLI", None)
+        else:
+            os.environ["AGENTTALK_CLI"] = self.old_cli
+        if self.old_cli_home is None:
+            os.environ.pop("AGENTTALK_CLI_HOME", None)
+        else:
+            os.environ["AGENTTALK_CLI_HOME"] = self.old_cli_home
+        if self.old_cli_spec is None:
+            os.environ.pop("AGENTTALK_CLI_NPM_SPEC", None)
+        else:
+            os.environ["AGENTTALK_CLI_NPM_SPEC"] = self.old_cli_spec
+        if self.old_npm_command is None:
+            os.environ.pop("AGENTTALK_NPM_COMMAND", None)
+        else:
+            os.environ["AGENTTALK_NPM_COMMAND"] = self.old_npm_command
         self.tmp.cleanup()
 
     def configure_open_wake_passphrase(self, passphrase: str) -> None:
@@ -168,6 +193,62 @@ class ControlTests(unittest.TestCase):
 
         self.assertTrue(result["busyCheck"]["configured"])
         self.assertEqual(result["busyCheck"]["timeoutMs"], 3000)
+
+    def test_agenttalk_command_uses_managed_cli(self) -> None:
+        managed = control.managed_agenttalk_bin()
+        managed.parent.mkdir(parents=True, exist_ok=True)
+        managed.write_text("# managed agenttalk\n", encoding="utf-8")
+
+        with patch("agenttalk_hermes_plugin.control.shutil.which", return_value=None):
+            self.assertEqual(control.agenttalk_command(), str(managed))
+
+    def test_ensure_agenttalk_cli_installs_private_npm_copy(self) -> None:
+        os.environ["AGENTTALK_CLI_NPM_SPEC"] = "pistils-chat-cli@0.1.2"
+
+        def fake_run(args, **kwargs):
+            managed = control.managed_agenttalk_bin()
+            managed.parent.mkdir(parents=True, exist_ok=True)
+            managed.write_text("# managed agenttalk\n", encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0, stdout="installed", stderr="")
+
+        def fake_which(name):
+            if name in {"npm", "npm.cmd"}:
+                return "npm"
+            return None
+
+        with patch("agenttalk_hermes_plugin.control.shutil.which", side_effect=fake_which), patch(
+            "agenttalk_hermes_plugin.control.subprocess.run",
+            side_effect=fake_run,
+        ) as run:
+            result = control.ensure_agenttalk_cli()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["installed"])
+        self.assertTrue(result["managed"])
+        self.assertEqual(result["npmSpec"], "pistils-chat-cli@0.1.2")
+        self.assertIn("--prefix", run.call_args.args[0])
+
+    def test_ensure_agenttalk_cli_uses_default_github_spec(self) -> None:
+        def fake_run(args, **kwargs):
+            managed = control.managed_agenttalk_bin()
+            managed.parent.mkdir(parents=True, exist_ok=True)
+            managed.write_text("# managed agenttalk\n", encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0, stdout="installed", stderr="")
+
+        def fake_which(name):
+            if name in {"npm", "npm.cmd"}:
+                return "npm"
+            return None
+
+        with patch("agenttalk_hermes_plugin.control.shutil.which", side_effect=fake_which), patch(
+            "agenttalk_hermes_plugin.control.subprocess.run",
+            side_effect=fake_run,
+        ) as run:
+            result = control.ensure_agenttalk_cli()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["npmSpec"], "github:con-urr/pistils_chat_cli#main")
+        self.assertEqual(run.call_args.args[0][-1], "github:con-urr/pistils_chat_cli#main")
 
     def test_status_projects_agenttalk_state(self) -> None:
         control.ensure_agent_config()

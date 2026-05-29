@@ -22,6 +22,8 @@ def _body_value(body: dict[str, Any] | None, key: str, default: Any = None) -> A
 
 
 def _sync_supervisor_after_config_change(payload: dict[str, Any]) -> dict[str, Any]:
+    prior_ok = payload.get("ok")
+    prior_error = payload.get("error")
     if not payload.get("agentEnabled"):
         return payload
     if control.supervisor_running():
@@ -29,6 +31,9 @@ def _sync_supervisor_after_config_change(payload: dict[str, Any]) -> dict[str, A
     else:
         payload["supervisorStart"] = control.start_supervisor()
     payload.update(control.status())
+    if prior_ok is False:
+        payload["ok"] = False
+        payload["error"] = prior_error or "AgentTalk plugin action failed"
     return payload
 
 
@@ -39,7 +44,7 @@ async def get_status(live: bool = False) -> dict[str, Any]:
 
 @router.post("/setup")
 async def setup(body: dict[str, Any] | None = None) -> dict[str, Any]:
-    return _sync_supervisor_after_config_change(control.ensure_agent_config(
+    payload = control.ensure_agent_config(
         repo=_body_value(body, "repo"),
         handle=_body_value(body, "handle"),
         enabled=bool(_body_value(body, "enabled", False)),
@@ -50,7 +55,13 @@ async def setup(body: dict[str, Any] | None = None) -> dict[str, Any]:
         allowed_wake_sender_agent_ids=_body_value(body, "allowedWakeSenderAgentIds"),
         blocked_wake_sender_agent_ids=_body_value(body, "blockedWakeSenderAgentIds"),
         force=bool(_body_value(body, "force", False)),
-    ))
+    )
+    if bool(_body_value(body, "installCli", True)):
+        payload["cliInstall"] = control.ensure_agenttalk_cli()
+        if not payload["cliInstall"].get("ok"):
+            payload["ok"] = False
+            payload["error"] = payload["cliInstall"].get("error", "AgentTalk CLI install failed")
+    return _sync_supervisor_after_config_change(payload)
 
 
 @router.post("/agent")
@@ -62,9 +73,14 @@ async def set_agent(body: dict[str, Any] | None = None) -> dict[str, Any]:
             enabled=True,
             wake_enabled=False,
         )
+        cli_install = control.ensure_agenttalk_cli()
         payload = control.set_agent_enabled(True)
         payload["supervisorStart"] = control.start_supervisor()
         payload.update(control.status())
+        payload["cliInstall"] = cli_install
+        if not cli_install.get("ok"):
+            payload["ok"] = False
+            payload["error"] = cli_install.get("error", "AgentTalk CLI install failed")
         return payload
     payload = control.set_agent_enabled(False)
     payload["supervisorStop"] = control.stop_supervisor()
@@ -113,6 +129,17 @@ async def deny_wake_request(request_id: str, body: dict[str, Any] | None = None)
 @router.get("/doctor")
 async def get_doctor() -> dict[str, Any]:
     return control.doctor()
+
+
+@router.post("/cli/install")
+async def install_cli(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    install = control.ensure_agenttalk_cli(force=bool(_body_value(body, "force", False)))
+    payload = control.status()
+    payload["cliInstall"] = install
+    if not install.get("ok"):
+        payload["ok"] = False
+        payload["error"] = install.get("error", "AgentTalk CLI install failed")
+    return payload
 
 
 @router.get("/logs")

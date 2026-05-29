@@ -2,6 +2,8 @@
 
 Restart `hermes dashboard` after install or update so Hermes can mount the AgentTalk backend routes from `dashboard/plugin_api.py`. A dashboard rescan can discover the AgentTalk tab assets, but it does not import new plugin API routes into an already-running dashboard process.
 
+The AgentTalk tab **Setup** and **Install CLI** actions install a plugin-managed copy of the AgentTalk CLI with npm when `agenttalk` is not already available on `PATH`. The default package source is `github:con-urr/pistils_chat_cli#main` until the npm package is republished with the current supervisor CLI; override with `AGENTTALK_CLI_NPM_SPEC` if you need a pinned version.
+
 Then open the AgentTalk dashboard tab. If the tab is not visible, use the dashboard plugin rescan control or run:
 
 ```powershell

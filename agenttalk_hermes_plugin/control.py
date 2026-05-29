@@ -29,6 +29,7 @@ OPEN_WAKE_APPROVAL_PASSPHRASE_REQUIRED = (
 OPEN_WAKE_APPROVAL_DIGEST = "sha256"
 OPEN_WAKE_APPROVAL_KEY_LENGTH = 32
 OPEN_WAKE_APPROVAL_ITERATIONS = 210_000
+AGENTTALK_CLI_NPM_SPEC = "github:con-urr/pistils_chat_cli#main"
 
 
 def _home() -> Path:
@@ -120,6 +121,25 @@ def state_path(agent: dict[str, Any] | None = None) -> Path:
 
 def wake_change_requests_path() -> Path:
     return supervisor_home() / "wake-change-requests.json"
+
+
+def managed_cli_home() -> Path:
+    configured = os.environ.get("AGENTTALK_CLI_HOME")
+    if configured:
+        return _expand(configured)
+    return supervisor_home() / "cli"
+
+
+def managed_agenttalk_bin() -> Path:
+    bin_name = "agenttalk.cmd" if sys.platform == "win32" else "agenttalk"
+    return managed_cli_home() / "node_modules" / ".bin" / bin_name
+
+
+def npm_command() -> str | None:
+    configured = os.environ.get("AGENTTALK_NPM_COMMAND")
+    if configured:
+        return configured
+    return shutil.which("npm") or shutil.which("npm.cmd")
 
 
 def load_agent_state(agent: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -721,13 +741,79 @@ def agenttalk_command() -> str | None:
     configured = os.environ.get("AGENTTALK_CLI")
     if configured:
         return configured
-    return shutil.which("agenttalk")
+    from_path = shutil.which("agenttalk")
+    if from_path:
+        return from_path
+    managed = managed_agenttalk_bin()
+    return str(managed) if managed.exists() else None
+
+
+def ensure_agenttalk_cli(*, force: bool = False) -> dict[str, Any]:
+    existing = None if force else agenttalk_command()
+    if existing:
+        return {
+            "ok": True,
+            "installed": False,
+            "command": existing,
+            "managed": str(managed_agenttalk_bin()) == existing,
+        }
+
+    npm = npm_command()
+    if not npm:
+        return {
+            "ok": False,
+            "error": "npm is not installed or not on PATH; install Node.js/npm, then run Hermes AgentTalk setup again.",
+            "managedCliHome": str(managed_cli_home()),
+        }
+
+    spec = os.environ.get("AGENTTALK_CLI_NPM_SPEC") or AGENTTALK_CLI_NPM_SPEC
+    home = managed_cli_home()
+    home.mkdir(parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            [
+                npm,
+                "install",
+                "--prefix",
+                str(home),
+                "--no-audit",
+                "--no-fund",
+                "--omit=dev",
+                spec,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=180,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"Failed to install AgentTalk CLI with npm: {exc}",
+            "managedCliHome": str(home),
+        }
+
+    command = agenttalk_command()
+    ok = completed.returncode == 0 and bool(command)
+    return {
+        "ok": ok,
+        "installed": ok,
+        "command": command,
+        "managed": bool(command and str(managed_agenttalk_bin()) == command),
+        "managedCliHome": str(home),
+        "npm": npm,
+        "npmSpec": spec,
+        "exitCode": completed.returncode,
+        "stdout": completed.stdout.strip()[-2000:],
+        "stderr": completed.stderr.strip()[-2000:],
+        **({} if ok else {"error": "npm install completed but the agenttalk command was not found."}),
+    }
 
 
 def _run_agenttalk(args: list[str]) -> dict[str, Any]:
     command = agenttalk_command()
     if not command:
-        return {"ok": False, "error": "agenttalk CLI not found on PATH"}
+        return {"ok": False, "error": "AgentTalk CLI is not installed"}
     try:
         completed = subprocess.run(
             [command, *args],
@@ -816,7 +902,10 @@ def supervisor_running() -> bool:
 def start_supervisor() -> dict[str, Any]:
     command = agenttalk_command()
     if not command:
-        return {"ok": False, "error": "agenttalk CLI not found on PATH"}
+        install = ensure_agenttalk_cli()
+        command = agenttalk_command()
+        if not command:
+            return {"ok": False, "error": "agenttalk CLI not installed", "cliInstall": install}
     if supervisor_running():
         return {"ok": True, "started": False, "pid": supervisor_pid()}
     home = supervisor_home()
@@ -943,6 +1032,8 @@ def status(*, live: bool = False) -> dict[str, Any]:
             },
         } if agent else None,
         "agenttalkCli": agenttalk_command(),
+        "agenttalkCliManagedPath": str(managed_agenttalk_bin()),
+        "agenttalkCliInstalled": bool(agenttalk_command()),
         "configPath": str(supervisor_config_path()),
     }
 
@@ -963,5 +1054,10 @@ def doctor() -> dict[str, Any]:
         **current,
         "checks": checks,
         "agenttalkSupervisorDoctor": supervisor,
+        "agenttalkCliInstallHint": (
+            None
+            if agenttalk_command()
+            else "Run hermes agenttalk setup or use the AgentTalk dashboard Install CLI action."
+        ),
         "ok": all(check["ok"] for check in checks),
     }

@@ -1,5 +1,5 @@
 name: agenttalk
-version: 0.1.4
+version: 0.1.5
 description: "AgentTalk wake supervisor controls for Hermes."
 author: AgentTalk
 kind: standalone

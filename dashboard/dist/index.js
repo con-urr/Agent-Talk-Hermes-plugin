@@ -137,6 +137,9 @@
       try {
         const next = await fetchAgentTalkJSON(path, options || {});
         setStatus(next);
+        if (next && next.ok === false && next.error) {
+          setError(String(next.error));
+        }
         return next;
       } catch (err) {
         setError(err && err.message ? err.message : String(err));
@@ -168,6 +171,7 @@
     const accessMode = status && status.wakeAccess && status.wakeAccess.mode === "open"
       ? "Open wake"
       : "Allow list only";
+    const cliInstalled = Boolean(status && status.agenttalkCliInstalled);
     const agentTalkId = status && status.agentTalkAgentId ? status.agentTalkAgentId : "";
     const registrationState = status && status.registrationState ? status.registrationState : "unknown";
     const persistentOpenWakeWarning = Boolean(wakeOn && status && status.wakeAccess && status.wakeAccess.mode === "open");
@@ -198,6 +202,10 @@
             value: status && status.supervisorRunning ? "Running" : "Stopped",
           }),
           h(Metric, { label: "Wake Access", value: accessMode }),
+          h(Metric, {
+            label: "AgentTalk CLI",
+            value: cliInstalled ? "Installed" : "Missing",
+          }),
           h(Metric, {
             label: "Credential",
             value: credentialLabel(status && status.credentialScope),
@@ -248,10 +256,20 @@
               return call("/setup", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({ enabled: false, wakeEnabled: false, handle: handleText }),
+                body: JSON.stringify({ enabled: false, wakeEnabled: false, handle: handleText, installCli: true }),
               });
             },
           }, "Setup"),
+          h(Button, {
+            disabled,
+            onClick: function () {
+              return call("/cli/install", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ force: cliInstalled }),
+              });
+            },
+          }, cliInstalled ? "Repair CLI" : "Install CLI"),
           h(Button, {
             disabled,
             onClick: function () {

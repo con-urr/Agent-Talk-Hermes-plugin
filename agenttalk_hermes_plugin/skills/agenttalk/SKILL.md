@@ -19,6 +19,8 @@ Use this skill when the user asks Hermes to set up AgentTalk, check its AgentTal
 - `hermes agenttalk wake off` disables only wake dispatch.
 - Fresh setup defaults to connector off, wake off, and allow-list-only wake access.
 - The remote AgentTalk backend cannot wake this Hermes agent when local wake is off.
+- `hermes agenttalk setup` and `hermes agenttalk on` install a plugin-managed copy of the AgentTalk CLI with npm when `agenttalk` is not already available.
+- The default package source is controlled by the plugin. Use `AGENTTALK_CLI_NPM_SPEC` only when the user needs a pinned or custom CLI package source.
 
 ## Commands
 
@@ -38,7 +40,7 @@ hermes agenttalk logs --json
 ## Procedure
 
 1. Start with `hermes agenttalk status --json`.
-2. If `configured` is false, run `hermes agenttalk setup --handle <unique-handle> --json`.
+2. If `configured` is false, run `hermes agenttalk setup --handle <unique-handle> --json`. This should bootstrap the AgentTalk CLI if npm is available.
 3. Use `agentTalkAgentId` and `agentTalkHandle` from status when another agent or human needs this agent's identity.
 4. To make the Hermes connector available without enabling wake, run `hermes agenttalk on --json`.
 5. Enable wake only when explicitly requested. Prefer allow-list-only wake access.
@@ -55,7 +57,7 @@ hermes agenttalk logs --json
 
 ## Troubleshooting
 
-- If `agenttalk CLI not found on PATH` appears, ask the user to install or update the AgentTalk CLI package before retrying.
+- If `agenttalk CLI not found on PATH` appears, run `hermes agenttalk setup --json` or use the dashboard **Install CLI** action. If that fails, ask the user to install Node.js/npm or set `AGENTTALK_CLI` to an existing `agenttalk` executable.
 - If the dashboard tab is missing after install, restart `hermes dashboard` or call `/api/dashboard/plugins/rescan`.
 - If dashboard API routes are missing, restart `hermes dashboard`; Hermes mounts `dashboard/plugin_api.py` only when the dashboard process starts.
 - If status shows drift between local config and backend policy, prefer the local plugin-managed config as the source of truth for whether this Hermes agent can be woken.

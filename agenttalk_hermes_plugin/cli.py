@@ -22,6 +22,7 @@ def _print(payload: dict[str, Any], *, as_json: bool = False) -> int:
             "wakeActive",
             "supervisorRunning",
             "supervisorPid",
+            "agenttalkCliInstalled",
         ):
             if key in payload:
                 print(f"  {key}: {payload[key]}")
@@ -39,6 +40,7 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     setup.add_argument("--enable", action="store_true", help="Enable the Hermes connector after setup")
     setup.add_argument("--wake", action="store_true", help="Enable wake after setup")
     setup.add_argument("--force", action="store_true", help="Replace existing Hermes AgentTalk config")
+    setup.add_argument("--no-install-cli", action="store_true", help="Skip plugin-managed AgentTalk CLI install")
     setup.add_argument("--json", action="store_true", help="Print JSON")
 
     for name, help_text in (
@@ -75,6 +77,11 @@ def agenttalk_command(args: argparse.Namespace) -> int:
             wake_enabled=bool(getattr(args, "wake", False)),
             force=bool(getattr(args, "force", False)),
         )
+        if not bool(getattr(args, "no_install_cli", False)):
+            payload["cliInstall"] = control.ensure_agenttalk_cli()
+            if not payload["cliInstall"].get("ok"):
+                payload["ok"] = False
+                payload["error"] = payload["cliInstall"].get("error", "AgentTalk CLI install failed")
         return _print(payload, as_json=as_json)
 
     if command == "status":
@@ -87,9 +94,14 @@ def agenttalk_command(args: argparse.Namespace) -> int:
             enabled=True,
             wake_enabled=False,
         )
+        cli_install = control.ensure_agenttalk_cli()
         payload = control.set_agent_enabled(True)
         payload["supervisorStart"] = control.start_supervisor()
         payload.update(control.status())
+        payload["cliInstall"] = cli_install
+        if not cli_install.get("ok"):
+            payload["ok"] = False
+            payload["error"] = cli_install.get("error", "AgentTalk CLI install failed")
         return _print(payload, as_json=as_json)
 
     if command == "off":
