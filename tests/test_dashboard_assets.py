@@ -33,6 +33,16 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn(f"version: {version}", plugin_yaml)
         self.assertIn(f'version = "{version}"', pyproject)
 
+    def test_plugin_skill_is_shipped(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        skill = root / "agenttalk_hermes_plugin" / "skills" / "agenttalk" / "SKILL.md"
+
+        self.assertTrue(skill.is_file())
+        text = skill.read_text(encoding="utf-8")
+        self.assertIn("name: agenttalk", text)
+        self.assertIn("hermes agenttalk status --json", text)
+        self.assertIn("Do not silently enable open wake", text)
+
 
 if __name__ == "__main__":
     unittest.main()

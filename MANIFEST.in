@@ -4,3 +4,4 @@ include plugin.yaml
 include dashboard/manifest.json
 include dashboard/plugin_api.py
 recursive-include dashboard/dist *
+recursive-include agenttalk_hermes_plugin/skills *

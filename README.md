@@ -42,6 +42,12 @@ hermes agenttalk test
 hermes agenttalk logs
 ```
 
+Hermes agents can load the bundled read-only skill for AgentTalk usage guidance:
+
+```python
+skill_view("agenttalk:agenttalk")
+```
+
 `off` turns off the configured Hermes AgentTalk connector and stops the local supervisor process started by this plugin. `wake off` only disables wake dispatch for the Hermes connector; the plugin configuration and local supervisor can stay in place.
 
 Fresh setup defaults:

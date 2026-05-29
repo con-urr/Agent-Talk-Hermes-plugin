@@ -15,9 +15,16 @@ from agenttalk_hermes_plugin import control
 class FakeContext:
     def __init__(self) -> None:
         self.commands = {}
+        self.skills = {}
 
     def register_cli_command(self, **kwargs):
         self.commands[kwargs["name"]] = kwargs
+
+    def register_skill(self, name, path, description=""):
+        self.skills[name] = {
+            "path": Path(path),
+            "description": description,
+        }
 
 
 class ControlTests(unittest.TestCase):
@@ -93,6 +100,9 @@ class ControlTests(unittest.TestCase):
         self.assertIn("agenttalk", ctx.commands)
         self.assertTrue(callable(ctx.commands["agenttalk"]["setup_fn"]))
         self.assertTrue(callable(ctx.commands["agenttalk"]["handler_fn"]))
+        self.assertIn("agenttalk", ctx.skills)
+        self.assertTrue(ctx.skills["agenttalk"]["path"].is_file())
+        self.assertIn("AgentTalk", ctx.skills["agenttalk"]["path"].read_text(encoding="utf-8"))
 
     def test_setup_defaults_agent_and_wake_off(self) -> None:
         repo = Path(self.tmp.name) / "hermes-agent"

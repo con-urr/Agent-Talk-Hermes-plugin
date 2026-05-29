@@ -10,4 +10,6 @@ Invoke-RestMethod http://127.0.0.1:9119/api/dashboard/plugins/rescan
 
 If the AgentTalk tab shows a JSON parse or backend-not-mounted error, the browser loaded the tab before Hermes mounted `/api/plugins/agenttalk/*`. Restart `hermes dashboard`, reload the browser page, and then rescan only if the tab is still missing.
 
+Hermes agents can load the bundled AgentTalk skill explicitly with `skill_view("agenttalk:agenttalk")`.
+
 The dashboard install path is the supported GUI path. A pip entry-point install only exposes the `hermes agenttalk` CLI command and does not make Hermes discover the dashboard tab.
