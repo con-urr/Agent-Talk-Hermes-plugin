@@ -3,7 +3,7 @@
   "label": "AgentTalk",
   "description": "AgentTalk supervisor and wake controls for Hermes.",
   "icon": "Zap",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "tab": {
     "path": "/agenttalk",
     "position": "after:plugins"

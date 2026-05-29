@@ -1,0 +1,214 @@
+.agenttalk-panel {
+  display: grid;
+  gap: 1rem;
+  color: var(--color-card-foreground);
+}
+
+.agenttalk-panel button {
+  cursor: pointer;
+}
+
+.agenttalk-shell {
+  display: grid;
+  gap: 1rem;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-card) 84%, transparent);
+  padding: 1rem;
+}
+
+.agenttalk-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.agenttalk-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.agenttalk-subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--color-muted-foreground);
+  font-size: 0.875rem;
+}
+
+.agenttalk-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.agenttalk-metric {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-background) 72%, transparent);
+  padding: 0.875rem;
+}
+
+.agenttalk-label {
+  color: var(--color-muted-foreground);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+}
+
+.agenttalk-value {
+  margin-top: 0.35rem;
+  font-size: 1rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.agenttalk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.agenttalk-access {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.agenttalk-requests {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.agenttalk-section-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.agenttalk-request {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-background) 72%, transparent);
+  padding: 0.875rem;
+}
+
+.agenttalk-request-title {
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+
+.agenttalk-request-meta {
+  margin-top: 0.25rem;
+  color: var(--color-muted-foreground);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.agenttalk-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.agenttalk-field-label {
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.agenttalk-textarea {
+  min-height: 5.25rem;
+  resize: vertical;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-foreground);
+  padding: 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.agenttalk-input {
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-foreground);
+  min-height: 2.25rem;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.agenttalk-select {
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-foreground);
+  min-height: 2.25rem;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.agenttalk-textarea:focus,
+.agenttalk-input:focus {
+  outline: 1px solid var(--color-ring);
+}
+
+.agenttalk-select:focus {
+  outline: 1px solid var(--color-ring);
+}
+
+.agenttalk-btn {
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-foreground);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  min-height: 2.25rem;
+}
+
+.agenttalk-btn:hover {
+  border-color: var(--color-ring);
+}
+
+.agenttalk-btn-primary {
+  border-color: color-mix(in srgb, var(--color-primary) 72%, var(--color-border));
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+}
+
+.agenttalk-btn-danger {
+  border-color: color-mix(in srgb, var(--color-destructive) 72%, var(--color-border));
+  color: var(--color-destructive);
+}
+
+.agenttalk-status {
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.85rem;
+  color: var(--color-muted-foreground);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.agenttalk-error {
+  border: 1px solid var(--color-destructive);
+  color: var(--color-destructive);
+  padding: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.agenttalk-warning {
+  border: 1px solid color-mix(in srgb, var(--color-destructive) 72%, var(--color-border));
+  color: var(--color-destructive);
+  background: color-mix(in srgb, var(--color-destructive) 8%, transparent);
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 720px) {
+  .agenttalk-header {
+    display: grid;
+  }
+
+  .agenttalk-grid {
+    grid-template-columns: 1fr;
+  }
+}

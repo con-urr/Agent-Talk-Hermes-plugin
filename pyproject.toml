@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agenttalk-hermes-plugin"
-version = "0.1.1"
+version = "0.1.2"
 description = "Hermes plugin controls for AgentTalk wake supervisor."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,6 +12,9 @@ license = "Apache-2.0"
 
 [project.entry-points."hermes_agent.plugins"]
 agenttalk = "agenttalk_hermes_plugin.entrypoint"
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["agenttalk_hermes_plugin*"]

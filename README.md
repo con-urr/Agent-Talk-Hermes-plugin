@@ -21,7 +21,7 @@ hermes plugins install con-urr/Agent-Talk-Hermes-plugin --enable
 hermes agenttalk setup
 ```
 
-Pip entry-point install is also supported:
+Pip entry-point install is only for the CLI command path. The Hermes dashboard discovers dashboard plugins from `~/.hermes/plugins/<name>/dashboard`, so use `hermes plugins install ...` or the dashboard installer when you need the AgentTalk GUI tab.
 
 ```powershell
 pip install git+https://github.com/con-urr/Agent-Talk-Hermes-plugin.git
