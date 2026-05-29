@@ -12,6 +12,7 @@
 
   const API_ROOT = "/api/plugins/agenttalk";
   const OPEN_WAKE_WARNING = "Careful: you are about to expose this agent to open wake requests from any AgentTalk sender who can deliver a message. This is generally inadvisable unless you have hardened the runtime and limited the blast radius of malicious actors attempting to influence or control your agents.";
+  const API_NOT_MOUNTED = "AgentTalk dashboard backend is not mounted. Restart hermes dashboard after installing or updating the plugin, then reload this page. Hermes rescans can discover dashboard tabs, but plugin_api.py routes are mounted only when the dashboard process starts.";
 
   function stateLabel(value) {
     return value ? "On" : "Off";
@@ -42,6 +43,62 @@
   function approvalLabel(value) {
     if (!value || value.mode === "none") return "Off";
     return value.configured ? "Passphrase set" : "Passphrase not set";
+  }
+
+  function dashboardBasePath() {
+    const raw = window.__HERMES_BASE_PATH__ || "";
+    if (!raw) return "";
+    const withLead = raw.startsWith("/") ? raw : "/" + raw;
+    return withLead.replace(/\/+$/, "");
+  }
+
+  function looksLikeHtml(text) {
+    const sample = String(text || "").trim().slice(0, 120).toLowerCase();
+    return sample.startsWith("<!doctype") || sample.startsWith("<html") || sample.indexOf("<head") >= 0 || sample.indexOf("<body") >= 0;
+  }
+
+  function readableErrorFromJson(payload, fallback) {
+    if (payload && typeof payload === "object") {
+      if (payload.error) return String(payload.error);
+      if (payload.detail) {
+        return typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail);
+      }
+      if (payload.message) return String(payload.message);
+    }
+    return fallback;
+  }
+
+  async function fetchAgentTalkJSON(path, options) {
+    const headers = new Headers(options && options.headers ? options.headers : {});
+    const token = window.__HERMES_SESSION_TOKEN__;
+    if (token && !headers.has("X-Hermes-Session-Token")) {
+      headers.set("X-Hermes-Session-Token", token);
+    }
+    const res = await fetch(dashboardBasePath() + API_ROOT + path, Object.assign({}, options || {}, { headers }));
+    const contentType = res.headers.get("content-type") || "";
+    const text = await res.text();
+    let payload = null;
+
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch (err) {
+        if (looksLikeHtml(text)) {
+          throw new Error(API_NOT_MOUNTED);
+        }
+        const preview = text.replace(/\s+/g, " ").slice(0, 180);
+        throw new Error("AgentTalk API returned non-JSON response" + (contentType ? " (" + contentType + ")" : "") + ": " + preview);
+      }
+    }
+
+    if (!res.ok) {
+      throw new Error(res.status + ": " + readableErrorFromJson(payload, res.statusText || "AgentTalk API request failed"));
+    }
+
+    if (!payload || typeof payload !== "object") {
+      throw new Error("AgentTalk API returned an empty or invalid JSON response.");
+    }
+    return payload;
   }
 
   function Metric(props) {
@@ -78,12 +135,12 @@
       setBusy(path);
       setError("");
       try {
-        const next = await SDK.fetchJSON(API_ROOT + path, options || {});
+        const next = await fetchAgentTalkJSON(path, options || {});
         setStatus(next);
         return next;
       } catch (err) {
         setError(err && err.message ? err.message : String(err));
-        throw err;
+        return null;
       } finally {
         setBusy("");
       }

@@ -20,6 +20,18 @@ class DashboardAssetTests(unittest.TestCase):
 
         bundle = (dashboard / manifest["entry"]).read_text(encoding="utf-8")
         self.assertIn('REGISTRY.register("agenttalk"', bundle)
+        self.assertIn("AgentTalk dashboard backend is not mounted", bundle)
+        self.assertNotIn("SDK.fetchJSON(API_ROOT", bundle)
+
+    def test_versions_match_across_plugin_manifests(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        dashboard_manifest = json.loads((root / "dashboard" / "manifest.json").read_text(encoding="utf-8"))
+        plugin_yaml = (root / "plugin.yaml").read_text(encoding="utf-8")
+        pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+
+        version = dashboard_manifest["version"]
+        self.assertIn(f"version: {version}", plugin_yaml)
+        self.assertIn(f'version = "{version}"', pyproject)
 
 
 if __name__ == "__main__":

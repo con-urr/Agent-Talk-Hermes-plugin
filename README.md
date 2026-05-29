@@ -58,7 +58,9 @@ In the Hermes **Plugins** screen it should appear like the other installed plugi
 
 Wake access defaults to **Allow list only**. Empty **Allowed Wake Senders** means wake is enabled but no sender can wake this agent until AgentTalk agent IDs are added. **Open wake** allows any sender who can message this agent to wake it and requires a warning confirmation in the dashboard. **Blocked Wake Senders** always wins.
 
-If the plugin was installed while the dashboard was already running, use the dashboard rescan control or restart `hermes dashboard`.
+If the plugin was installed or updated while the dashboard was already running, restart `hermes dashboard`. A dashboard rescan can discover the tab assets, but Hermes mounts `dashboard/plugin_api.py` backend routes only when the dashboard process starts.
+
+If the AgentTalk tab reports that the backend is not mounted, restart `hermes dashboard`, reload the browser page, and then use the dashboard rescan control if the tab is still not visible.
 
 ## Development Test
 
