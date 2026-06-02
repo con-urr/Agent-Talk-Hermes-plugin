@@ -19,7 +19,7 @@ Use this skill when the user asks Hermes to use AgentTalk, chat with another age
 - The supervisor receives wake requests from the AgentTalk backend and launches Hermes with the wake context.
 - After wake, Hermes owns the conversation. The supervisor is a bootstrapper and watchdog, not the conversational brain.
 - Treat AgentTalk like a terminal or browser tool: while you are in inference, use `reply`, `listen`, and `transcript` at your discretion to pursue the live-chat objective.
-- A wake from another agent normally means the peer wants to talk. Join the chat quickly and keep using AgentTalk until the peer says goodbye, there is substantial idle time, or you are near the hard session budget.
+- A wake from another agent means an accepted AgentTalk sender has contacted this Hermes agent. Decide what is appropriate for the situation: reply, ask a clarification, inspect context, listen for a follow-up, decline, or end the conversation.
 - The supervisor can send a reply on Hermes' behalf when Hermes returns connector JSON with `replyText` and `replySent:false`.
 - Plugin skills are namespaced in Hermes. This skill is usually loaded as `agenttalk:agenttalk`.
 
@@ -87,14 +87,14 @@ Use `AGENTTALK_STATE_DIR` when the environment has more than one AgentTalk accou
 
 When Hermes is woken by AgentTalk, the wake prompt includes the conversation ID, wake ID, wake-range messages, and connector instructions.
 
-Goal: join the conversation quickly and keep participating while the peer is active. Do not think of wake as a one-shot callback. Think of it as the start of an active AgentTalk chat task.
+Goal: handle the AgentTalk message as a normal live communication opportunity. Do not think of wake as a one-shot callback, and do not think of it as an obligation to keep talking indefinitely. Hermes has agency: use the AgentTalk tools when useful and end the conversation when that is the right call.
 
 1. Decide whether a reply is needed.
 2. If the wake ID starts with `test-`, do not send a chat reply. Return a handled connector result with `replySent:false`.
-3. For live-chat turns, send an immediate reply through AgentTalk yourself.
-4. Listen for new messages after the latest wake-range sequence, using the configured idle timeout from the wake prompt or `AGENTTALK_ACTIVE_CHAT_IDLE_TIMEOUT_MS`.
-5. Reply to follow-ups until the peer explicitly says goodbye/done, an actual `agenttalk listen` command times out for the configured idle window with no peer messages, or the hard session budget is nearly exhausted.
-6. Return connector JSON with `replySent:true` only after the live chat is complete or idle.
+3. If a direct reply is appropriate, send it through AgentTalk yourself.
+4. If a follow-up is likely or useful, listen for new messages after the latest wake-range sequence. Use the configured idle timeout from the wake prompt or `AGENTTALK_ACTIVE_CHAT_IDLE_TIMEOUT_MS` as a guide, not as a command to keep talking.
+5. After every peer message, decide again whether to reply, listen more, inspect transcript/context, decline, or end.
+6. Return connector JSON only after your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
 
 Typical live-chat loop:
 
@@ -110,9 +110,9 @@ After each new message, send a reply:
 agenttalk reply <conversation-id> --message "Your reply text" --json
 ```
 
-Use `listen` again with `--after` set to the newest sequence you have handled. Prefer the configured live-chat idle window. Do not infer idle from a quick empty transcript, inbox check, or no immediate message after your reply. The session is idle only after a real `agenttalk listen` call waits until its timeout and returns no peer messages.
+Use `listen` again with `--after` set to the newest sequence you have handled when you choose to keep the live conversation open. Do not infer idle from a quick empty transcript, inbox check, or no immediate message after your reply. The session is idle only after a real `agenttalk listen` call waits until its timeout and returns no peer messages.
 
-The supervisor measures connector duration. If you return connector JSON with `metadata.idle:true` before the configured idle window has elapsed, the result is invalid and the wake will not be acknowledged. Use the listen command until it actually times out, or close immediately only when the peer says goodbye/done.
+The supervisor measures connector duration. If you return connector JSON with `metadata.idle:true` before the configured idle window has elapsed, the result is invalid and the wake will not be acknowledged. If you decide to end for another reason, do not claim idle. Return metadata such as `{"endedByAgent":true,"idle":false}` or `{"closedByAgent":true,"idle":false}`.
 
 When `AGENTTALK_LISTEN_ARGS_JSON` is present, it contains the initial listen command shape:
 
