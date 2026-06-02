@@ -34,6 +34,74 @@ DEFAULT_CONNECTOR_TIMEOUT_MS = 300_000
 DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS = 600_000
 DEFAULT_LIVE_CHAT_MAX_SESSION_MS = 3_600_000
 DEFAULT_STARTUP_TIMEOUT_MS = 60_000
+WAKE_PROMPT_WARNING = (
+    "Wake prompt changes affect how Hermes interprets incoming AgentTalk messages. "
+    "If the prompt removes conversation IDs, cursor guidance, or reply/listen instructions, live chat performance can degrade."
+)
+STANDARD_WAKE_PROMPT_TEMPLATE = """You are {{agentName}} / @{{handle}}, woken by AgentTalk.
+
+Reason: {{reason}}
+Conversation: {{conversationId}}
+Wake ID: {{wakeId}}
+Sender agent ID: {{senderAgentId}}
+Visible peer label(s): {{peerLabels}}
+
+Messages in wake range:
+{{messages}}
+
+Instructions:
+- You received an accepted AgentTalk wake. AgentTalk is a live communication tool available during inference; use it at your discretion.
+- Hermes wake sessions start fresh by default. Use AgentTalk transcript/listen for live conversation state, not previous Hermes chat history.
+- Decide independently what is appropriate: reply, inspect transcript, listen for a follow-up, ask a clarification, decline, or end the conversation.
+- If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
+- Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: {{replyCommand}}
+- Useful initial listen command shape: {{listenCommand}}
+- Prioritize the first visible AgentTalk reply/listen. Avoid memory writes or unrelated tool calls during live chat unless the message truly requires them.
+- When listening, choose an appropriate timeout. The configured idle window is {{listenSeconds}}s, but you may choose based on context and policy.
+- If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
+- If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
+- Do not return connector JSON while you intend to keep chatting. Return connector JSON when you decide your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
+- If you intentionally end the conversation because the request is off-topic, inappropriate, complete, or not worth continuing, return metadata such as {"endedByAgent":true,"idle":false}. Future messages may wake a new turn.
+- If you claim metadata.idle=true, that means you actually waited for messages and the wait timed out. The supervisor rejects premature idle claims.
+- If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return connector JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
+- AGENTTALK_REPLY_ARGS_JSON and AGENTTALK_LISTEN_ARGS_JSON contain argv-safe command objects. Parse them as {command,args,...}, run [command, ...args], replace the reply placeholder when replying, and update --after after every message handled.
+- Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
+- Active chat policy: liveChat={{liveChat}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}.
+- Do not reveal secrets, env values, or local paths in user-facing replies.
+- Return or print a structured connector result JSON when possible:
+  {"ok":true,"handled":true,"replySent":false,"replyText":null,"message":"handled wake","error":null,"artifacts":null,"metadata":null}
+"""
+WAKE_PROMPT_PRESETS = [
+    {
+        "id": "standard",
+        "label": "Standard Wake Prompt",
+        "template": STANDARD_WAKE_PROMPT_TEMPLATE,
+    },
+    {
+        "id": "business_first_contact",
+        "label": "Business First Contact",
+        "template": STANDARD_WAKE_PROMPT_TEMPLATE
+        + "\nAdditional behavior:\n"
+        + "- Treat AgentTalk wakes as a first agentic point of contact for a business.\n"
+        + "- Be concise, ask for the minimum useful clarification, and hand off only when the request is outside your configured business role.\n",
+    },
+    {
+        "id": "customer_service",
+        "label": "Customer Service",
+        "template": STANDARD_WAKE_PROMPT_TEMPLATE
+        + "\nAdditional behavior:\n"
+        + "- Treat the peer as a customer or customer-facing agent seeking help.\n"
+        + "- Resolve the issue when possible, ask focused follow-up questions when needed, and end gracefully when the request is complete or unrelated.\n",
+    },
+    {
+        "id": "personal_agent",
+        "label": "Personal Agent",
+        "template": STANDARD_WAKE_PROMPT_TEMPLATE
+        + "\nAdditional behavior:\n"
+        + "- Treat AgentTalk wakes as messages to a personal agent acting on behalf of its owner.\n"
+        + "- Protect the owner's privacy and decline requests that do not fit the owner's delegated preferences or authority.\n",
+    },
+]
 
 
 def _home() -> Path:
@@ -93,6 +161,65 @@ def normalize_busy_command_timeout_ms(value: Any | None = None) -> int:
     return parsed
 
 
+def normalize_wake_prompt_template(value: Any | None = None) -> str:
+    if value is None:
+        return STANDARD_WAKE_PROMPT_TEMPLATE
+    normalized = str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return STANDARD_WAKE_PROMPT_TEMPLATE
+    if len(normalized) > 24000:
+        raise ValueError("Wake prompt must be 24000 characters or fewer.")
+    return normalized + "\n"
+
+
+def normalize_hermes_toolsets(value: Any | None = None) -> list[str]:
+    if value in (None, ""):
+        return ["terminal"]
+    if isinstance(value, str):
+        items = re.split(r"[\s,]+", value.strip())
+    elif isinstance(value, list):
+        items = value
+    else:
+        raise ValueError("Hermes toolsets must be a comma-separated string or list.")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        toolset = str(item).strip()
+        if not toolset:
+            continue
+        if not re.match(r"^[A-Za-z0-9_.:-]{1,80}$", toolset):
+            raise ValueError("Hermes toolset names may contain letters, numbers, dots, underscores, dashes, and colons.")
+        if toolset not in seen:
+            normalized.append(toolset)
+            seen.add(toolset)
+    if len(normalized) > 20:
+        raise ValueError("Hermes toolsets must contain 20 or fewer entries.")
+    return normalized or ["terminal"]
+
+
+def render_wake_prompt_preview(template: str | None = None) -> str:
+    values = {
+        "agentName": AGENT_NAME,
+        "handle": default_agent_handle(),
+        "reason": "direct_message",
+        "conversationId": "4097",
+        "wakeId": "test-preview",
+        "senderAgentId": "agt_example_peer",
+        "peerLabels": "example-agent",
+        "messages": "[27] example-agent: Can you confirm you are available to chat over AgentTalk?",
+        "replyCommand": "agenttalk reply 4097 --message ... --json",
+        "listenCommand": "agenttalk listen --conversation 4097 --after 27 --timeout 600s --json",
+        "listenSeconds": str(DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS // 1000),
+        "liveChat": "true",
+        "idleTimeoutMs": str(DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS),
+        "maxSessionMs": str(DEFAULT_LIVE_CHAT_MAX_SESSION_MS),
+    }
+    text = normalize_wake_prompt_template(template)
+    for key, value in values.items():
+        text = re.sub(r"\{\{\s*" + re.escape(key) + r"\s*\}\}", value, text)
+    return text
+
+
 def supervisor_home() -> Path:
     configured = os.environ.get("AGENTTALK_SUPERVISOR_HOME")
     if configured:
@@ -137,6 +264,16 @@ def managed_cli_home() -> Path:
 def managed_agenttalk_bin() -> Path:
     bin_name = "agenttalk.cmd" if sys.platform == "win32" else "agenttalk"
     return managed_cli_home() / "node_modules" / ".bin" / bin_name
+
+
+def hermes_config_path() -> Path:
+    configured = os.environ.get("HERMES_CONFIG")
+    if configured:
+        return _expand(configured)
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        return _expand(hermes_home) / "config.yaml"
+    return _home() / ".hermes" / "config.yaml"
 
 
 def npm_command() -> str | None:
@@ -421,6 +558,7 @@ def _new_agent(
         "liveChatIdleTimeoutMs": DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS,
         "liveChatMaxSessionMs": DEFAULT_LIVE_CHAT_MAX_SESSION_MS,
         "startupTimeoutMs": DEFAULT_STARTUP_TIMEOUT_MS,
+        "wakePromptTemplate": STANDARD_WAKE_PROMPT_TEMPLATE,
     }
     if normalized_busy_command:
         connector["busyCommand"] = normalized_busy_command
@@ -528,6 +666,7 @@ def ensure_agent_config(
             connector.setdefault("liveChatIdleTimeoutMs", DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS)
             connector.setdefault("liveChatMaxSessionMs", DEFAULT_LIVE_CHAT_MAX_SESSION_MS)
             connector.setdefault("startupTimeoutMs", DEFAULT_STARTUP_TIMEOUT_MS)
+            connector.setdefault("wakePromptTemplate", STANDARD_WAKE_PROMPT_TEMPLATE)
             if busy_command is not None:
                 normalized_busy_command = normalize_busy_command(busy_command)
                 if normalized_busy_command:
@@ -594,6 +733,7 @@ def _ensure_connector_defaults(agent: dict[str, Any]) -> None:
     connector.setdefault("liveChatIdleTimeoutMs", DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS)
     connector.setdefault("liveChatMaxSessionMs", DEFAULT_LIVE_CHAT_MAX_SESSION_MS)
     connector.setdefault("startupTimeoutMs", DEFAULT_STARTUP_TIMEOUT_MS)
+    connector.setdefault("wakePromptTemplate", STANDARD_WAKE_PROMPT_TEMPLATE)
     if not connector.get("busyCommand"):
         normalized_busy_command = normalize_busy_command(default_busy_command())
         if normalized_busy_command:
@@ -689,6 +829,28 @@ def set_wake_access(
         )
     else:
         wake.setdefault("blockedWakeSenderAgentIds", [])
+    save_config(config)
+    return status()
+
+
+def set_wake_behavior(
+    *,
+    wake_prompt_template: Any | None = None,
+    hermes_toolsets: Any | None = None,
+) -> dict[str, Any]:
+    config = load_config()
+    agent = _agent(config)
+    if agent is None:
+        ensure_agent_config(enabled=False, wake_enabled=False)
+        config = load_config()
+        agent = _agent(config)
+    assert agent is not None
+    _ensure_connector_defaults(agent)
+    connector = agent.setdefault("connector", {})
+    if wake_prompt_template is not None:
+        connector["wakePromptTemplate"] = normalize_wake_prompt_template(wake_prompt_template)
+    if hermes_toolsets is not None:
+        connector["hermesToolsets"] = normalize_hermes_toolsets(hermes_toolsets)
     save_config(config)
     return status()
 
@@ -876,6 +1038,275 @@ def _run_agenttalk(args: list[str]) -> dict[str, Any]:
     return payload
 
 
+def agenttalk_mcp_server_config() -> dict[str, Any]:
+    config = load_config()
+    return {
+        "command": agenttalk_command() or str(managed_agenttalk_bin()),
+        "args": ["mcp"],
+        "env": {
+            "AGENTTALK_STATE_DIR": str(default_state_dir()),
+            "SPACETIMEDB_HOST": config.get("host") or "https://maincloud.spacetimedb.com",
+            "SPACETIMEDB_DB_NAME": config.get("databaseName") or "crimsonconfidentialgibbon",
+        },
+        "timeout": 120,
+        "connect_timeout": 30,
+        "supports_parallel_tool_calls": False,
+    }
+
+
+def agenttalk_mcp_yaml_snippet() -> str:
+    cfg = agenttalk_mcp_server_config()
+    env = cfg["env"]
+    return (
+        "mcp_servers:\n"
+        "  agenttalk:\n"
+        f"    command: {json.dumps(cfg['command'])}\n"
+        f"    args: {json.dumps(cfg['args'])}\n"
+        "    env:\n"
+        f"      AGENTTALK_STATE_DIR: {json.dumps(env['AGENTTALK_STATE_DIR'])}\n"
+        f"      SPACETIMEDB_HOST: {json.dumps(env['SPACETIMEDB_HOST'])}\n"
+        f"      SPACETIMEDB_DB_NAME: {json.dumps(env['SPACETIMEDB_DB_NAME'])}\n"
+        "    timeout: 120\n"
+        "    connect_timeout: 30\n"
+    )
+
+
+def _load_yaml_config(path: Path) -> tuple[dict[str, Any], Any | None, str | None]:
+    try:
+        import yaml  # type: ignore
+    except Exception as exc:
+        return {}, None, f"PyYAML is not available in this Hermes environment: {exc}"
+    if not path.exists():
+        return {}, yaml, None
+    try:
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {}, yaml, f"Could not parse Hermes config YAML: {exc}"
+    if parsed is None:
+        return {}, yaml, None
+    if not isinstance(parsed, dict):
+        return {}, yaml, "Hermes config root is not a mapping."
+    return parsed, yaml, None
+
+
+def _agenttalk_mcp_entry(data: dict[str, Any]) -> dict[str, Any] | None:
+    servers = data.get("mcp_servers")
+    if not isinstance(servers, dict):
+        return None
+    entry = servers.get("agenttalk")
+    return entry if isinstance(entry, dict) else None
+
+
+def agenttalk_mcp_status() -> dict[str, Any]:
+    path = hermes_config_path()
+    data, _yaml, error = _load_yaml_config(path)
+    entry = _agenttalk_mcp_entry(data)
+    config = load_config()
+    agent = _agent(config)
+    connector = agent.get("connector", {}) if agent else {}
+    toolsets = normalize_hermes_toolsets(connector.get("hermesToolsets"))
+    local_config = agenttalk_mcp_server_config()
+    cli_config = _run_agenttalk(["mcp", "config", "--client", "all", "--json"]) if agenttalk_command() else None
+    return {
+        "ok": bool(agenttalk_command()),
+        "serverName": "agenttalk",
+        "configured": entry is not None,
+        "enabled": entry is not None and entry.get("enabled", True) is not False,
+        "hermesConfigPath": str(path),
+        "configError": error,
+        "serverConfig": local_config,
+        "configuredServer": entry,
+        "yamlSnippet": agenttalk_mcp_yaml_snippet(),
+        "toolsetEnabled": "agenttalk" in toolsets,
+        "hermesToolsets": toolsets,
+        "cliConfig": cli_config.get("json") if isinstance(cli_config, dict) else None,
+    }
+
+
+def configure_agenttalk_mcp(enabled: bool = True) -> dict[str, Any]:
+    path = hermes_config_path()
+    data, yaml, error = _load_yaml_config(path)
+    if error:
+        return {
+            "ok": False,
+            "error": error,
+            "hermesConfigPath": str(path),
+            "yamlSnippet": agenttalk_mcp_yaml_snippet(),
+        }
+    if yaml is None:
+        return {
+            "ok": False,
+            "error": "PyYAML is not available in this Hermes environment.",
+            "hermesConfigPath": str(path),
+            "yamlSnippet": agenttalk_mcp_yaml_snippet(),
+        }
+    servers = data.setdefault("mcp_servers", {})
+    if not isinstance(servers, dict):
+        return {
+            "ok": False,
+            "error": "Hermes config mcp_servers is not a mapping.",
+            "hermesConfigPath": str(path),
+        }
+    if enabled:
+        servers["agenttalk"] = agenttalk_mcp_server_config()
+    else:
+        servers.pop("agenttalk", None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    tmp.replace(path)
+
+    current_toolsets = normalize_hermes_toolsets(status().get("hermesToolsets"))
+    if enabled and "agenttalk" not in current_toolsets:
+        set_wake_behavior(hermes_toolsets=[*current_toolsets, "agenttalk"])
+    elif not enabled and "agenttalk" in current_toolsets:
+        set_wake_behavior(hermes_toolsets=[toolset for toolset in current_toolsets if toolset != "agenttalk"])
+
+    payload = status()
+    payload["agenttalkMcpChange"] = {"ok": True, "enabled": enabled, "hermesConfigPath": str(path)}
+    return payload
+
+
+def _string_value(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _wake_run_index(limit: int = 200) -> dict[str, dict[str, Any]]:
+    config = load_config()
+    run_dir = Path(config.get("runDir") or supervisor_home() / "runs")
+    if not run_dir.exists():
+        return {}
+    candidates = sorted(
+        run_dir.rglob("input.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+    index: dict[str, dict[str, Any]] = {}
+    for input_path in candidates:
+        try:
+            parsed = json.loads(input_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        wake = parsed.get("wake") if isinstance(parsed, dict) else None
+        if not isinstance(wake, dict):
+            continue
+        conversation_id = _string_value(wake.get("conversationId"), wake.get("conversation_id"))
+        if not conversation_id or conversation_id in index:
+            continue
+        index[conversation_id] = {
+            "direction": "wake",
+            "directionLabel": "Wake",
+            "wakeId": _string_value(wake.get("wakeId"), wake.get("wake_id")),
+            "senderAgentId": _string_value(wake.get("senderAgentId"), wake.get("sender_agent_id")),
+            "reason": _string_value(wake.get("reason")),
+            "runPath": str(input_path.parent),
+            "createdAt": datetime.fromtimestamp(input_path.stat().st_mtime, timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z"),
+        }
+    return index
+
+
+def _normalize_chat_message(message: dict[str, Any]) -> dict[str, Any]:
+    author = _string_value(
+        message.get("authorLabel"),
+        message.get("author"),
+        message.get("handle"),
+        message.get("authorIdentity"),
+        "unknown",
+    )
+    return {
+        "id": _string_value(message.get("id"), message.get("messageId")),
+        "conversationId": _string_value(message.get("conversationId")),
+        "sequence": _string_value(message.get("sequence")),
+        "author": author,
+        "authorKind": _string_value(message.get("authorKind"), message.get("kind")),
+        "text": _string_value(message.get("text"), message.get("message")) or "",
+        "sentAt": _string_value(message.get("sentAt"), message.get("sent"), message.get("createdAt")),
+        "kind": _string_value(message.get("kind")) or "chat",
+        "isHermes": author in {AGENT_NAME, default_agent_handle(), "@" + default_agent_handle()},
+    }
+
+
+def chat_messages(conversation_id: str, *, limit: int = 100) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit), 100))
+    payload = _run_agenttalk(["conversation", "messages", str(conversation_id), "--limit", str(safe_limit), "--json"])
+    parsed = payload.get("json") if isinstance(payload, dict) else None
+    if not isinstance(parsed, dict):
+        return {
+            "ok": False,
+            "conversationId": str(conversation_id),
+            "messages": [],
+            "error": payload.get("error") or payload.get("stderr") or "AgentTalk conversation messages returned no JSON",
+            "raw": payload,
+        }
+    rows = parsed.get("messages") if isinstance(parsed.get("messages"), list) else []
+    messages = [_normalize_chat_message(row) for row in rows if isinstance(row, dict)]
+    return {
+        "ok": bool(parsed.get("ok", payload.get("ok", False))),
+        "conversationId": str(conversation_id),
+        "messages": messages,
+        "page": parsed.get("page") if isinstance(parsed.get("page"), dict) else None,
+        "lastSequence": parsed.get("lastSequence"),
+        "nextAfterSequence": parsed.get("nextAfterSequence"),
+        "warnings": parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else [],
+        "raw": parsed,
+    }
+
+
+def chat_sessions(*, limit: int = 25) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit), 50))
+    payload = _run_agenttalk(["conversation", "list", "--json"])
+    parsed = payload.get("json") if isinstance(payload, dict) else None
+    if not isinstance(parsed, dict):
+        return {
+            "ok": False,
+            "sessions": [],
+            "error": payload.get("error") or payload.get("stderr") or "AgentTalk conversation list returned no JSON",
+            "raw": payload,
+        }
+    conversations = parsed.get("conversations") if isinstance(parsed.get("conversations"), list) else []
+    wake_index = _wake_run_index()
+    sessions: list[dict[str, Any]] = []
+    for row in conversations[:safe_limit]:
+        if not isinstance(row, dict):
+            continue
+        conversation_id = _string_value(row.get("id"), row.get("conversationId"))
+        if not conversation_id:
+            continue
+        wake = wake_index.get(conversation_id)
+        sessions.append(
+            {
+                "conversationId": conversation_id,
+                "title": _string_value(row.get("title")) or f"Conversation {conversation_id}",
+                "kind": _string_value(row.get("kind")) or "direct",
+                "lastActivity": _string_value(row.get("lastActivity"), row.get("updatedAt"), row.get("createdAt")),
+                "createdAt": _string_value(row.get("createdAt")),
+                "memberCount": row.get("memberCount"),
+                "direction": wake.get("direction") if wake else "manual_or_initiated",
+                "directionLabel": wake.get("directionLabel") if wake else "Manual or initiated",
+                "peer": {
+                    "label": _string_value(row.get("peerHandle"), row.get("peerLabel"), row.get("title")) or "AgentTalk peer",
+                    "agentId": wake.get("senderAgentId") if wake else None,
+                },
+                "wake": wake,
+                "raw": row,
+            }
+        )
+    return {
+        "ok": bool(parsed.get("ok", payload.get("ok", False))),
+        "sessions": sessions,
+        "count": len(sessions),
+        "raw": parsed,
+    }
+
+
 def live_supervisor_agent_status() -> dict[str, Any] | None:
     if not agenttalk_command():
         return None
@@ -1008,6 +1439,8 @@ def status(*, live: bool = False) -> dict[str, Any]:
     blocked_wake_sender_agent_ids = normalize_wake_sender_agent_ids(
         wake.get("blockedWakeSenderAgentIds"), "Blocked wake senders"
     )
+    wake_prompt_template = normalize_wake_prompt_template(connector.get("wakePromptTemplate"))
+    hermes_toolsets = normalize_hermes_toolsets(connector.get("hermesToolsets"))
     return {
         "ok": True,
         "plugin": PLUGIN_ID,
@@ -1056,7 +1489,23 @@ def status(*, live: bool = False) -> dict[str, Any]:
         "sessionReuse": {
             "enabled": bool(connector.get("reuseHermesSession")),
         },
-        "hermesToolsets": connector.get("hermesToolsets"),
+        "hermesToolsets": hermes_toolsets,
+        "wakePrompt": {
+            "template": wake_prompt_template,
+            "standardTemplate": STANDARD_WAKE_PROMPT_TEMPLATE,
+            "preview": render_wake_prompt_preview(wake_prompt_template),
+            "warning": WAKE_PROMPT_WARNING,
+            "presets": WAKE_PROMPT_PRESETS,
+        },
+        "agenttalkMcp": agenttalk_mcp_status() if agenttalk_command() else {
+            "ok": False,
+            "serverName": "agenttalk",
+            "configured": False,
+            "enabled": False,
+            "hermesConfigPath": str(hermes_config_path()),
+            "yamlSnippet": agenttalk_mcp_yaml_snippet(),
+            "error": "AgentTalk CLI is not installed",
+        },
         "supervisorRunning": supervisor_running(),
         "supervisorPid": supervisor_pid(),
         "agent": {
@@ -1071,7 +1520,7 @@ def status(*, live: bool = False) -> dict[str, Any]:
             "sessionReuse": {
                 "enabled": bool(connector.get("reuseHermesSession")),
             },
-            "hermesToolsets": connector.get("hermesToolsets"),
+            "hermesToolsets": hermes_toolsets,
         } if agent else None,
         "agenttalkCli": agenttalk_command(),
         "agenttalkCliManagedPath": str(managed_agenttalk_bin()),

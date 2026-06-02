@@ -22,6 +22,11 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn('REGISTRY.register("agenttalk"', bundle)
         self.assertIn("AgentTalk dashboard backend is not mounted", bundle)
         self.assertIn("/cli/install", bundle)
+        self.assertIn("/wake-prompt/preview", bundle)
+        self.assertIn("/test-wake", bundle)
+        self.assertIn("/chats", bundle)
+        self.assertIn("Wake Prompt", bundle)
+        self.assertIn("AgentTalk Chats", bundle)
         self.assertNotIn("SDK.fetchJSON(API_ROOT", bundle)
 
     def test_versions_match_across_plugin_manifests(self) -> None:
@@ -44,6 +49,7 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn("hermes agenttalk status --json", text)
         self.assertIn("Do not silently enable open wake", text)
         self.assertIn("hermes agenttalk setup --json", text)
+        self.assertIn("agenttalk_listen_conversation", text)
 
 
 if __name__ == "__main__":

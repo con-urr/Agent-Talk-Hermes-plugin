@@ -157,10 +157,13 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(agent["connector"]["liveChatIdleTimeoutMs"], 600000)
         self.assertEqual(agent["connector"]["liveChatMaxSessionMs"], 3600000)
         self.assertEqual(agent["connector"]["startupTimeoutMs"], 60000)
+        self.assertEqual(agent["connector"]["wakePromptTemplate"], control.STANDARD_WAKE_PROMPT_TEMPLATE)
         self.assertFalse(config["defaultWakePolicy"]["wakeOnDirectMessage"])
         self.assertEqual(result["credentialScope"], "plugin_runtime")
         self.assertEqual(result["registrationState"], "not_registered")
         self.assertFalse(result["busyCheck"]["configured"])
+        self.assertIn("wakePrompt", result)
+        self.assertEqual(result["wakePrompt"]["template"], control.STANDARD_WAKE_PROMPT_TEMPLATE)
 
     def test_setup_accepts_unique_agenttalk_handle(self) -> None:
         result = control.ensure_agent_config(handle="Hermes-Gui-Test")
@@ -299,6 +302,25 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(cleared["wakeAccess"]["mode"], "allow_list")
         self.assertEqual(cleared["wakeAccess"]["allowedWakeSenderAgentIds"], [])
         self.assertEqual(cleared["wakeAccess"]["blockedWakeSenderAgentIds"], ["agent-c"])
+
+    def test_wake_behavior_updates_prompt_and_toolsets(self) -> None:
+        control.ensure_agent_config()
+
+        result = control.set_wake_behavior(
+            wake_prompt_template="Custom {{conversationId}}",
+            hermes_toolsets="terminal,agenttalk,memory",
+        )
+
+        self.assertEqual(result["wakePrompt"]["template"], "Custom {{conversationId}}\n")
+        self.assertEqual(result["hermesToolsets"], ["terminal", "agenttalk", "memory"])
+        config = control.load_config()
+        self.assertEqual(config["agents"][0]["connector"]["wakePromptTemplate"], "Custom {{conversationId}}\n")
+        self.assertEqual(config["agents"][0]["connector"]["hermesToolsets"], ["terminal", "agenttalk", "memory"])
+
+    def test_wake_prompt_preview_renders_placeholders(self) -> None:
+        preview = control.render_wake_prompt_preview("Wake {{conversationId}} from {{senderAgentId}}")
+
+        self.assertEqual(preview, "Wake 4097 from agt_example_peer\n")
 
     def test_open_wake_requires_confirmation(self) -> None:
         control.ensure_agent_config()

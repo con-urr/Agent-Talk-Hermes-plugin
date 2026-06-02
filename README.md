@@ -64,7 +64,7 @@ Fresh setup defaults:
 
 The GUI surface is a native Hermes dashboard plugin extension. The repo ships `dashboard/manifest.json`, `dashboard/dist/*`, and `dashboard/plugin_api.py`; Hermes discovers those after the plugin is installed under the Hermes plugin home.
 
-In the Hermes **Plugins** screen it should appear like the other installed plugins, but with a dashboard tab instead of "No dashboard tab". The **AgentTalk** tab provides status, setup, plugin-managed CLI install/repair, connector on/off, wake on/off, wake sender allow/block lists, and test actions. The tab talks to local backend routes mounted by Hermes at `/api/plugins/agenttalk/*`.
+In the Hermes **Plugins** screen it should appear like the other installed plugins, but with a dashboard tab instead of "No dashboard tab". The **AgentTalk** tab provides status, setup, plugin-managed CLI install/repair, connector on/off, wake on/off, wake sender allow/block lists, wake prompt presets/preview, local MCP enablement, test actions, and recent AgentTalk chat logs. The tab talks to local backend routes mounted by Hermes at `/api/plugins/agenttalk/*`.
 
 Wake access defaults to **Allow list only**. Empty **Allowed Wake Senders** means wake is enabled but no sender can wake this agent until AgentTalk agent IDs are added. **Open wake** allows any sender who can message this agent to wake it and requires a warning confirmation in the dashboard. **Blocked Wake Senders** always wins.
 

@@ -115,6 +115,13 @@
   font-weight: 650;
 }
 
+.agenttalk-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
 .agenttalk-textarea {
   min-height: 5.25rem;
   resize: vertical;
@@ -124,6 +131,12 @@
   padding: 0.625rem;
   font: inherit;
   font-size: 0.875rem;
+}
+
+.agenttalk-prompt-textarea {
+  min-height: 14rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  line-height: 1.45;
 }
 
 .agenttalk-input {
@@ -179,6 +192,156 @@
   color: var(--color-destructive);
 }
 
+.agenttalk-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.agenttalk-note,
+.agenttalk-muted {
+  color: var(--color-muted-foreground);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.agenttalk-prompt-preview {
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-background) 82%, transparent);
+  color: var(--color-foreground);
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.agenttalk-mcp-box {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-background) 72%, transparent);
+  padding: 0.875rem;
+}
+
+.agenttalk-code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--color-muted-foreground);
+  font-size: 0.8125rem;
+}
+
+.agenttalk-chats {
+  display: grid;
+  gap: 0.75rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 1rem;
+}
+
+.agenttalk-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.agenttalk-session-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.agenttalk-session {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-background) 72%, transparent);
+  color: var(--color-foreground);
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.agenttalk-session:hover {
+  border-color: var(--color-ring);
+}
+
+.agenttalk-session-main {
+  min-width: 0;
+}
+
+.agenttalk-session-title {
+  font-size: 0.9375rem;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agenttalk-session-meta,
+.agenttalk-session-date,
+.agenttalk-message-meta {
+  color: var(--color-muted-foreground);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.agenttalk-session-meta {
+  margin-top: 0.25rem;
+}
+
+.agenttalk-chat-window {
+  display: grid;
+  gap: 0.625rem;
+  max-height: 28rem;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-background) 60%, transparent);
+  padding: 0.75rem;
+}
+
+.agenttalk-message-row {
+  display: flex;
+}
+
+.agenttalk-message-hermes {
+  justify-content: flex-end;
+}
+
+.agenttalk-message-peer {
+  justify-content: flex-start;
+}
+
+.agenttalk-message {
+  max-width: min(78%, 42rem);
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  padding: 0.625rem 0.75rem;
+}
+
+.agenttalk-message-hermes .agenttalk-message {
+  border-color: color-mix(in srgb, var(--color-primary) 58%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-background));
+}
+
+.agenttalk-message-text {
+  margin-top: 0.35rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.agenttalk-empty {
+  border: 1px solid var(--color-border);
+  color: var(--color-muted-foreground);
+  padding: 0.875rem;
+  font-size: 0.875rem;
+}
+
 .agenttalk-status {
   border-top: 1px solid var(--color-border);
   padding-top: 0.85rem;
@@ -210,5 +373,18 @@
 
   .agenttalk-grid {
     grid-template-columns: 1fr;
+  }
+
+  .agenttalk-chat-header,
+  .agenttalk-field-row {
+    display: grid;
+  }
+
+  .agenttalk-session {
+    grid-template-columns: 1fr;
+  }
+
+  .agenttalk-message {
+    max-width: 100%;
   }
 }

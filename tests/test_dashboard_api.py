@@ -94,6 +94,12 @@ class DashboardApiTests(unittest.TestCase):
         self.assertIn(("POST", "/agent"), route_keys)
         self.assertIn(("POST", "/wake"), route_keys)
         self.assertIn(("POST", "/wake-access"), route_keys)
+        self.assertIn(("POST", "/wake-prompt/preview"), route_keys)
+        self.assertIn(("POST", "/test-wake"), route_keys)
+        self.assertIn(("GET", "/mcp"), route_keys)
+        self.assertIn(("POST", "/mcp"), route_keys)
+        self.assertIn(("GET", "/chats"), route_keys)
+        self.assertIn(("GET", "/chats/{conversation_id}"), route_keys)
         self.assertIn(("GET", "/wake-requests"), route_keys)
         self.assertIn(("POST", "/wake-requests/{request_id}/approve"), route_keys)
         self.assertIn(("POST", "/wake-requests/{request_id}/deny"), route_keys)
@@ -120,6 +126,8 @@ class DashboardApiTests(unittest.TestCase):
                 {
                     "allowedWakeSenderAgentIds": "agent-a,agent-b",
                     "blockedWakeSenderAgentIds": "agent-c",
+                    "wakePromptTemplate": "Custom {{conversationId}}",
+                    "hermesToolsets": "terminal,agenttalk",
                 }
             )
         )
@@ -127,6 +135,15 @@ class DashboardApiTests(unittest.TestCase):
         self.assertEqual(result["wakeAccess"]["mode"], "allow_list")
         self.assertEqual(result["wakeAccess"]["allowedWakeSenderAgentIds"], ["agent-a", "agent-b"])
         self.assertEqual(result["wakeAccess"]["blockedWakeSenderAgentIds"], ["agent-c"])
+        self.assertEqual(result["wakePrompt"]["template"], "Custom {{conversationId}}\n")
+        self.assertEqual(result["hermesToolsets"], ["terminal", "agenttalk"])
+
+    def test_wake_prompt_preview_route(self) -> None:
+        api = load_plugin_api()
+        result = asyncio.run(api.preview_wake_prompt({"wakePromptTemplate": "Wake {{conversationId}}"}))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["preview"], "Wake 4097\n")
 
     def test_wake_access_route_requires_open_confirmation(self) -> None:
         api = load_plugin_api()

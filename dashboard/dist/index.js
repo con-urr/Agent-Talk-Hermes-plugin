@@ -45,6 +45,29 @@
     return value.configured ? "Passphrase set" : "Passphrase not set";
   }
 
+  function mcpLabel(value) {
+    if (!value || value.ok === false) return "Missing";
+    if (value.configured && value.enabled) return "Configured";
+    if (value.configured) return "Disabled";
+    return "Not configured";
+  }
+
+  function toolsetsText(value) {
+    return Array.isArray(value) ? value.join(", ") : "";
+  }
+
+  function formatDate(value) {
+    if (!value) return "No date";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  }
+
+  function shortText(value, fallback) {
+    const text = value ? String(value).trim() : "";
+    return text || fallback;
+  }
+
   function dashboardBasePath() {
     const raw = window.__HERMES_BASE_PATH__ || "";
     if (!raw) return "";
@@ -130,6 +153,15 @@
     const [blockedText, setBlockedText] = useState("");
     const [wakeAccessMode, setWakeAccessMode] = useState("allow_list");
     const [handleText, setHandleText] = useState("");
+    const [wakePromptText, setWakePromptText] = useState("");
+    const [toolsetsValue, setToolsetsValue] = useState("terminal");
+    const [promptPreview, setPromptPreview] = useState("");
+    const [showPromptPreview, setShowPromptPreview] = useState(false);
+    const [chatSessions, setChatSessions] = useState([]);
+    const [chatMessages, setChatMessages] = useState([]);
+    const [selectedChat, setSelectedChat] = useState(null);
+    const [chatBusy, setChatBusy] = useState("");
+    const [chatError, setChatError] = useState("");
 
     async function call(path, options) {
       setBusy(path);
@@ -150,7 +182,61 @@
     }
 
     async function refresh() {
-      await call("/status?live=1");
+      const next = await call("/status?live=1");
+      if (next && next.agenttalkCliInstalled) {
+        await refreshChats();
+      } else {
+        setChatSessions([]);
+        setChatError("");
+      }
+    }
+
+    async function refreshChats() {
+      setChatBusy("sessions");
+      setChatError("");
+      try {
+        const payload = await fetchAgentTalkJSON("/chats?limit=25");
+        if (payload && payload.ok === false && payload.error) {
+          setChatError(String(payload.error));
+        }
+        setChatSessions(Array.isArray(payload.sessions) ? payload.sessions : []);
+      } catch (err) {
+        setChatError(err && err.message ? err.message : String(err));
+      } finally {
+        setChatBusy("");
+      }
+    }
+
+    async function openChat(session) {
+      setSelectedChat(session);
+      setChatMessages([]);
+      setChatBusy(session.conversationId);
+      setChatError("");
+      try {
+        const payload = await fetchAgentTalkJSON("/chats/" + encodeURIComponent(session.conversationId) + "?limit=100");
+        if (payload && payload.ok === false && payload.error) {
+          setChatError(String(payload.error));
+        }
+        setChatMessages(Array.isArray(payload.messages) ? payload.messages : []);
+      } catch (err) {
+        setChatError(err && err.message ? err.message : String(err));
+      } finally {
+        setChatBusy("");
+      }
+    }
+
+    async function previewWakePrompt() {
+      setShowPromptPreview(true);
+      try {
+        const payload = await fetchAgentTalkJSON("/wake-prompt/preview", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ wakePromptTemplate: wakePromptText }),
+        });
+        setPromptPreview(payload.preview || "");
+      } catch (err) {
+        setError(err && err.message ? err.message : String(err));
+      }
     }
 
     useEffect(function () {
@@ -163,7 +249,10 @@
       setBlockedText(accessListText(access.blockedWakeSenderAgentIds));
       setWakeAccessMode(access.mode === "open" ? "open" : "allow_list");
       setHandleText(status && status.agentTalkHandle ? status.agentTalkHandle : "");
-    }, [status && status.wakeAccess]);
+      setWakePromptText(status && status.wakePrompt ? status.wakePrompt.template || status.wakePrompt.standardTemplate || "" : "");
+      setPromptPreview(status && status.wakePrompt ? status.wakePrompt.preview || "" : "");
+      setToolsetsValue(toolsetsText(status && status.hermesToolsets));
+    }, [status]);
 
     const disabled = Boolean(busy);
     const agentOn = Boolean(status && status.agentEnabled);
@@ -179,6 +268,10 @@
     const pendingRequests = status && Array.isArray(status.pendingWakeChangeRequests)
       ? status.pendingWakeChangeRequests
       : [];
+    const wakePrompt = status && status.wakePrompt ? status.wakePrompt : {};
+    const promptPresets = Array.isArray(wakePrompt.presets) ? wakePrompt.presets : [];
+    const agenttalkMcp = status && status.agenttalkMcp ? status.agenttalkMcp : null;
+    const mcpConfigured = Boolean(agenttalkMcp && agenttalkMcp.configured && agenttalkMcp.enabled);
 
     return h("div", { className: "agenttalk-panel" },
       h("section", { className: "agenttalk-shell" },
@@ -225,6 +318,10 @@
           h(Metric, {
             label: "Busy Check",
             value: status && status.busyCheck && status.busyCheck.configured ? "Configured" : "Off",
+          }),
+          h(Metric, {
+            label: "AgentTalk MCP",
+            value: mcpLabel(agenttalkMcp),
           }),
         ),
         h("div", { className: "agenttalk-actions" },
@@ -275,7 +372,23 @@
             onClick: function () {
               return call("/doctor");
             },
-          }, "Test"),
+          }, "Health"),
+          h(Button, {
+            disabled: disabled || !agentOn,
+            onClick: function () {
+              return call("/test-wake", { method: "POST" });
+            },
+          }, "Test Wake"),
+          h(Button, {
+            disabled,
+            onClick: function () {
+              return call("/mcp", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ enabled: !mcpConfigured }),
+              });
+            },
+          }, mcpConfigured ? "Disable MCP" : "Enable MCP"),
           h(Button, {
             disabled: disabled || !agentTalkId || !navigator.clipboard,
             onClick: function () {
@@ -339,6 +452,60 @@
               value: blockedText,
             }),
           ),
+          h("div", { className: "agenttalk-field" },
+            h("label", { className: "agenttalk-field-label" }, "Hermes Toolsets"),
+            h("input", {
+              className: "agenttalk-input",
+              disabled,
+              onChange: function (event) {
+                setToolsetsValue(event.target.value);
+              },
+              placeholder: "terminal, agenttalk",
+              spellCheck: false,
+              value: toolsetsValue,
+            }),
+          ),
+          h("div", { className: "agenttalk-field" },
+            h("div", { className: "agenttalk-field-row" },
+              h("label", { className: "agenttalk-field-label" }, "Wake Prompt"),
+              h(Button, {
+                disabled,
+                onClick: previewWakePrompt,
+              }, "Preview"),
+            ),
+            h("div", { className: "agenttalk-preset-row" },
+              promptPresets.map(function (preset) {
+                return h(Button, {
+                  key: preset.id || preset.label,
+                  disabled,
+                  onClick: function () {
+                    setWakePromptText(preset.template || "");
+                    setPromptPreview("");
+                  },
+                }, preset.label || "Preset");
+              }),
+            ),
+            h("textarea", {
+              className: "agenttalk-textarea agenttalk-prompt-textarea",
+              disabled,
+              onChange: function (event) {
+                setWakePromptText(event.target.value);
+                setPromptPreview("");
+              },
+              rows: 12,
+              spellCheck: false,
+              value: wakePromptText,
+            }),
+            wakePrompt.warning ? h("div", { className: "agenttalk-note" }, wakePrompt.warning) : null,
+            showPromptPreview ? h("pre", { className: "agenttalk-prompt-preview" }, promptPreview || "Preview pending") : null,
+          ),
+          h("div", { className: "agenttalk-mcp-box" },
+            h("div", null,
+              h("div", { className: "agenttalk-field-label" }, "Local MCP"),
+              h("div", { className: "agenttalk-muted" }, mcpConfigured ? "Configured in Hermes user config" : "Not configured in Hermes user config"),
+            ),
+            h("code", { className: "agenttalk-code" }, agenttalkMcp && agenttalkMcp.hermesConfigPath ? agenttalkMcp.hermesConfigPath : "Hermes config path pending"),
+          ),
           h("div", { className: "agenttalk-actions" },
             h(Button, {
               disabled,
@@ -357,6 +524,8 @@
                   wakeAccessMode,
                   blockedWakeSenderAgentIds: blockedText,
                   openWakeRiskAccepted: openWake,
+                  wakePromptTemplate: wakePromptText,
+                  hermesToolsets: toolsetsValue,
                 };
                 if (openWakeApprovalPassphrase) {
                   body.openWakeApprovalPassphrase = openWakeApprovalPassphrase;
@@ -370,7 +539,7 @@
                   body: JSON.stringify(body),
                 });
               },
-            }, "Save Wake Access"),
+            }, "Save Settings"),
           ),
         ),
         pendingRequests.length ? h("div", { className: "agenttalk-requests" },
@@ -387,7 +556,7 @@
             return h("div", { className: "agenttalk-request", key: request.id },
               h("div", null,
                 h("div", { className: "agenttalk-request-title" }, summary || "wake settings"),
-                h("div", { className: "agenttalk-request-meta" }, (request.requestedBy || "agent-runtime") + " · " + (request.reason || "no reason provided")),
+                h("div", { className: "agenttalk-request-meta" }, (request.requestedBy || "agent-runtime") + " - " + (request.reason || "no reason provided")),
                 wantsOpen ? h("div", { className: "agenttalk-warning" }, OPEN_WAKE_WARNING) : null,
               ),
               h("div", { className: "agenttalk-actions" },
@@ -428,6 +597,61 @@
             );
           }),
         ) : null,
+        h("div", { className: "agenttalk-chats" },
+          h("div", { className: "agenttalk-chat-header" },
+            h("h2", { className: "agenttalk-section-title" }, selectedChat ? shortText(selectedChat.title, "Conversation") : "AgentTalk Chats"),
+            h("div", { className: "agenttalk-actions" },
+              selectedChat ? h(Button, {
+                disabled: Boolean(chatBusy),
+                onClick: function () {
+                  setSelectedChat(null);
+                  setChatMessages([]);
+                },
+              }, "Back") : null,
+              h(Button, {
+                disabled: Boolean(chatBusy),
+                onClick: refreshChats,
+              }, "Refresh Chats"),
+            ),
+          ),
+          chatError ? h("div", { className: "agenttalk-error" }, chatError) : null,
+          selectedChat ? h("div", { className: "agenttalk-chat-window" },
+            chatMessages.length ? chatMessages.map(function (message, index) {
+              const isHermes = Boolean(message.isHermes);
+              return h("div", {
+                className: "agenttalk-message-row " + (isHermes ? "agenttalk-message-hermes" : "agenttalk-message-peer"),
+                key: message.id || message.sequence || index,
+              },
+                h("div", { className: "agenttalk-message" },
+                  h("div", { className: "agenttalk-message-meta" },
+                    shortText(message.author, isHermes ? "Hermes" : "Peer") + " - " + formatDate(message.sentAt)
+                  ),
+                  h("div", { className: "agenttalk-message-text" }, message.text || ""),
+                ),
+              );
+            }) : h("div", { className: "agenttalk-empty" }, chatBusy ? "Loading messages" : "No messages found"),
+          ) : h("div", { className: "agenttalk-session-list" },
+            chatSessions.length ? chatSessions.map(function (session) {
+              return h("button", {
+                className: "agenttalk-session",
+                disabled: Boolean(chatBusy),
+                key: session.conversationId,
+                onClick: function () {
+                  return openChat(session);
+                },
+                type: "button",
+              },
+                h("div", { className: "agenttalk-session-main" },
+                  h("div", { className: "agenttalk-session-title" }, shortText(session.title, "Conversation " + session.conversationId)),
+                  h("div", { className: "agenttalk-session-meta" },
+                    shortText(session.peer && session.peer.label, "AgentTalk peer") + " - " + shortText(session.directionLabel, "AgentTalk chat")
+                  ),
+                ),
+                h("div", { className: "agenttalk-session-date" }, formatDate(session.lastActivity || session.createdAt)),
+              );
+            }) : h("div", { className: "agenttalk-empty" }, chatBusy ? "Loading chats" : "No AgentTalk chats found"),
+          ),
+        ),
         h("div", { className: "agenttalk-status" },
           status && status.configPath ? "Config: " + status.configPath : "Config pending",
         ),

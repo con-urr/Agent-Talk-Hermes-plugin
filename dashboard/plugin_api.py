@@ -97,13 +97,61 @@ async def set_wake(body: dict[str, Any] | None = None) -> dict[str, Any]:
 
 @router.post("/wake-access")
 async def set_wake_access(body: dict[str, Any] | None = None) -> dict[str, Any]:
-    return _sync_supervisor_after_config_change(control.set_wake_access(
+    payload = control.set_wake_access(
         wake_access_mode=_body_value(body, "wakeAccessMode"),
         open_wake_risk_accepted=bool(_body_value(body, "openWakeRiskAccepted", False)),
         open_wake_approval_passphrase=_body_value(body, "openWakeApprovalPassphrase"),
         allowed_wake_sender_agent_ids=_body_value(body, "allowedWakeSenderAgentIds"),
         blocked_wake_sender_agent_ids=_body_value(body, "blockedWakeSenderAgentIds"),
-    ))
+    )
+    if isinstance(body, dict) and ("wakePromptTemplate" in body or "hermesToolsets" in body):
+        payload = control.set_wake_behavior(
+            wake_prompt_template=_body_value(body, "wakePromptTemplate"),
+            hermes_toolsets=_body_value(body, "hermesToolsets"),
+        )
+    return _sync_supervisor_after_config_change(payload)
+
+
+@router.post("/wake-prompt/preview")
+async def preview_wake_prompt(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    template = _body_value(body, "wakePromptTemplate")
+    return {
+        "ok": True,
+        "preview": control.render_wake_prompt_preview(template),
+        "warning": control.WAKE_PROMPT_WARNING,
+    }
+
+
+@router.post("/test-wake")
+async def test_wake() -> dict[str, Any]:
+    result = control._run_agenttalk(["supervisor", "test-wake", control.AGENT_NAME, "--json"])
+    payload = control.status(live=True)
+    payload["testWake"] = result
+    if not result.get("ok"):
+        payload["ok"] = False
+        payload["error"] = result.get("error") or result.get("stderr") or "AgentTalk test wake failed"
+    return payload
+
+
+@router.get("/mcp")
+async def get_mcp() -> dict[str, Any]:
+    return {"ok": True, "agenttalkMcp": control.agenttalk_mcp_status()}
+
+
+@router.post("/mcp")
+async def set_mcp(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    enabled = bool(_body_value(body, "enabled", True))
+    return _sync_supervisor_after_config_change(control.configure_agenttalk_mcp(enabled=enabled))
+
+
+@router.get("/chats")
+async def get_chats(limit: int = 25) -> dict[str, Any]:
+    return control.chat_sessions(limit=limit)
+
+
+@router.get("/chats/{conversation_id}")
+async def get_chat(conversation_id: str, limit: int = 100) -> dict[str, Any]:
+    return control.chat_messages(conversation_id, limit=limit)
 
 
 @router.get("/wake-requests")
