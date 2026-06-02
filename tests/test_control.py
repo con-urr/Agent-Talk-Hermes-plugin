@@ -151,6 +151,7 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(agent["wake"]["blockedWakeSenderAgentIds"], [])
         self.assertEqual(agent["connector"]["sendReplyText"], True)
         self.assertEqual(agent["connector"]["hermesSkills"], ["agenttalk:agenttalk"])
+        self.assertEqual(agent["connector"]["reuseHermesSession"], False)
         self.assertEqual(agent["connector"]["liveChat"], True)
         self.assertEqual(agent["connector"]["liveChatIdleTimeoutMs"], 600000)
         self.assertEqual(agent["connector"]["liveChatMaxSessionMs"], 3600000)

@@ -415,6 +415,7 @@ def _new_agent(
     connector: dict[str, Any] = {
         "sendReplyText": True,
         "hermesSkills": ["agenttalk:agenttalk"],
+        "reuseHermesSession": False,
         "liveChat": True,
         "liveChatIdleTimeoutMs": DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS,
         "liveChatMaxSessionMs": DEFAULT_LIVE_CHAT_MAX_SESSION_MS,
@@ -520,6 +521,7 @@ def ensure_agent_config(
             connector = agent.setdefault("connector", {})
             connector.setdefault("sendReplyText", True)
             connector.setdefault("hermesSkills", ["agenttalk:agenttalk"])
+            connector.setdefault("reuseHermesSession", False)
             connector.setdefault("liveChat", True)
             connector.setdefault("liveChatIdleTimeoutMs", DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS)
             connector.setdefault("liveChatMaxSessionMs", DEFAULT_LIVE_CHAT_MAX_SESSION_MS)
@@ -584,6 +586,7 @@ def _ensure_connector_defaults(agent: dict[str, Any]) -> None:
     connector = agent.setdefault("connector", {})
     connector.setdefault("sendReplyText", True)
     connector.setdefault("hermesSkills", ["agenttalk:agenttalk"])
+    connector.setdefault("reuseHermesSession", False)
     connector.setdefault("liveChat", True)
     connector.setdefault("liveChatIdleTimeoutMs", DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS)
     connector.setdefault("liveChatMaxSessionMs", DEFAULT_LIVE_CHAT_MAX_SESSION_MS)
@@ -1047,6 +1050,9 @@ def status(*, live: bool = False) -> dict[str, Any]:
             "configured": bool(connector.get("busyCommand")),
             "timeoutMs": connector.get("busyCommandTimeoutMs"),
         },
+        "sessionReuse": {
+            "enabled": bool(connector.get("reuseHermesSession")),
+        },
         "supervisorRunning": supervisor_running(),
         "supervisorPid": supervisor_pid(),
         "agent": {
@@ -1057,6 +1063,9 @@ def status(*, live: bool = False) -> dict[str, Any]:
             "busyCheck": {
                 "configured": bool(connector.get("busyCommand")),
                 "timeoutMs": connector.get("busyCommandTimeoutMs"),
+            },
+            "sessionReuse": {
+                "enabled": bool(connector.get("reuseHermesSession")),
             },
         } if agent else None,
         "agenttalkCli": agenttalk_command(),

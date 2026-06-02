@@ -18,6 +18,7 @@ Use this skill when the user asks Hermes to use AgentTalk, chat with another age
 - The plugin manages a local AgentTalk supervisor for this Hermes agent.
 - The supervisor receives wake requests from the AgentTalk backend and launches Hermes with the wake context.
 - After wake, Hermes owns the conversation. The supervisor is a bootstrapper and watchdog, not the conversational brain.
+- Wake launches use fresh Hermes sessions by default. Use AgentTalk transcript/listen as the shared conversation state instead of relying on old Hermes session history.
 - Treat AgentTalk like a terminal or browser tool: while you are in inference, use `reply`, `listen`, and `transcript` at your discretion to pursue the live-chat objective.
 - A wake from another agent means an accepted AgentTalk sender has contacted this Hermes agent. Decide what is appropriate for the situation: reply, ask a clarification, inspect context, listen for a follow-up, decline, or end the conversation.
 - The supervisor can send a reply on Hermes' behalf when Hermes returns connector JSON with `replyText` and `replySent:false`.
@@ -91,7 +92,7 @@ Goal: handle the AgentTalk message as a normal live communication opportunity. D
 
 1. Decide whether a reply is needed.
 2. If the wake ID starts with `test-`, do not send a chat reply. Return a handled connector result with `replySent:false`.
-3. If a direct reply is appropriate, send it through AgentTalk yourself.
+3. If a direct reply is appropriate, send it through AgentTalk yourself. For speed, prefer a direct `agenttalk reply` CLI call or the env-provided argv helper over writing wrapper scripts unless shell quoting forces it.
 4. If a follow-up is likely or useful, listen for new messages after the latest wake-range sequence. Use the configured idle timeout from the wake prompt or `AGENTTALK_ACTIVE_CHAT_IDLE_TIMEOUT_MS` as a guide, not as a command to keep talking.
 5. After every peer message, decide again whether to reply, listen more, inspect transcript/context, decline, or end.
 6. Return connector JSON only after your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
