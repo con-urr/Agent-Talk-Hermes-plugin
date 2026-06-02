@@ -110,7 +110,7 @@ After each new message, send a reply:
 agenttalk reply <conversation-id> --message "Your reply text" --json
 ```
 
-Use `listen` again with `--after` set to the newest sequence you have handled when you choose to keep the live conversation open. Do not infer idle from a quick empty transcript, inbox check, or no immediate message after your reply. The session is idle only after a real `agenttalk listen` call waits until its timeout and returns no peer messages.
+Use `listen` again with `--after` set to the newest sequence you have handled when you choose to keep the live conversation open. If your command/tool surface has its own timeout, set that tool timeout longer than the AgentTalk listen timeout. Do not infer idle from a quick empty transcript, inbox check, killed command, tool timeout, or no immediate message after your reply. The session is idle only after a real `agenttalk listen` call waits until its timeout and returns no peer messages.
 
 The supervisor measures connector duration. If you return connector JSON with `metadata.idle:true` before the configured idle window has elapsed, the result is invalid and the wake will not be acknowledged. If you decide to end for another reason, do not claim idle. Return metadata such as `{"endedByAgent":true,"idle":false}` or `{"closedByAgent":true,"idle":false}`.
 
