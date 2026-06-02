@@ -56,6 +56,16 @@
     return Array.isArray(value) ? value.join(", ") : "";
   }
 
+  function sequenceLabel(session) {
+    const start = session && session.startSequence ? String(session.startSequence) : "";
+    const end = session && (session.endSequence || session.derivedEndSequence)
+      ? String(session.endSequence || session.derivedEndSequence)
+      : "";
+    if (start && end && start !== end) return "#" + start + "-" + end;
+    if (start) return "#" + start;
+    return "";
+  }
+
   function formatDate(value) {
     if (!value) return "No date";
     const date = new Date(value);
@@ -155,11 +165,14 @@
     const [handleText, setHandleText] = useState("");
     const [wakePromptText, setWakePromptText] = useState("");
     const [toolsetsValue, setToolsetsValue] = useState("terminal");
+    const [maxConcurrentSessions, setMaxConcurrentSessions] = useState("1");
     const [promptPreview, setPromptPreview] = useState("");
     const [showPromptPreview, setShowPromptPreview] = useState(false);
     const [chatSessions, setChatSessions] = useState([]);
     const [chatMessages, setChatMessages] = useState([]);
     const [selectedChat, setSelectedChat] = useState(null);
+    const [chatFilter, setChatFilter] = useState("all");
+    const [chatSearch, setChatSearch] = useState("");
     const [chatBusy, setChatBusy] = useState("");
     const [chatError, setChatError] = useState("");
 
@@ -213,7 +226,11 @@
       setChatBusy(session.conversationId);
       setChatError("");
       try {
-        const payload = await fetchAgentTalkJSON("/chats/" + encodeURIComponent(session.conversationId) + "?limit=100");
+        const params = new URLSearchParams({ limit: "200" });
+        if (session.sessionId) {
+          params.set("sessionId", session.sessionId);
+        }
+        const payload = await fetchAgentTalkJSON("/chats/" + encodeURIComponent(session.conversationId) + "?" + params.toString());
         if (payload && payload.ok === false && payload.error) {
           setChatError(String(payload.error));
         }
@@ -252,6 +269,7 @@
       setWakePromptText(status && status.wakePrompt ? status.wakePrompt.template || status.wakePrompt.standardTemplate || "" : "");
       setPromptPreview(status && status.wakePrompt ? status.wakePrompt.preview || "" : "");
       setToolsetsValue(toolsetsText(status && status.hermesToolsets));
+      setMaxConcurrentSessions(String(status && status.maxConcurrentSessions ? status.maxConcurrentSessions : 1));
     }, [status]);
 
     const disabled = Boolean(busy);
@@ -272,6 +290,28 @@
     const promptPresets = Array.isArray(wakePrompt.presets) ? wakePrompt.presets : [];
     const agenttalkMcp = status && status.agenttalkMcp ? status.agenttalkMcp : null;
     const mcpConfigured = Boolean(agenttalkMcp && agenttalkMcp.configured && agenttalkMcp.enabled);
+    const sessionCap = status && status.maxConcurrentSessions ? status.maxConcurrentSessions : 1;
+    const runningSessions = status && status.runningWakeCount !== null && status.runningWakeCount !== undefined ? status.runningWakeCount : 0;
+    const filteredChatSessions = chatSessions
+      .filter(function (session) {
+        if (chatFilter !== "all" && session.direction !== chatFilter) return false;
+        const query = chatSearch.trim().toLowerCase();
+        if (!query) return true;
+        return [
+          session.title,
+          session.conversationId,
+          session.sessionId,
+          session.directionLabel,
+          session.peer && session.peer.label,
+          session.peer && session.peer.agentId,
+          session.wake && session.wake.wakeId,
+        ].filter(Boolean).join(" ").toLowerCase().indexOf(query) >= 0;
+      })
+      .sort(function (left, right) {
+        const leftDate = new Date(left.lastActivity || left.startedAt || left.createdAt || 0).getTime();
+        const rightDate = new Date(right.lastActivity || right.startedAt || right.createdAt || 0).getTime();
+        return rightDate - leftDate;
+      });
 
     return h("div", { className: "agenttalk-panel" },
       h("section", { className: "agenttalk-shell" },
@@ -322,6 +362,10 @@
           h(Metric, {
             label: "AgentTalk MCP",
             value: mcpLabel(agenttalkMcp),
+          }),
+          h(Metric, {
+            label: "Sessions",
+            value: String(runningSessions) + " / " + String(sessionCap),
           }),
         ),
         h("div", { className: "agenttalk-actions" },
@@ -466,6 +510,21 @@
             }),
           ),
           h("div", { className: "agenttalk-field" },
+            h("label", { className: "agenttalk-field-label" }, "Max Concurrent Sessions"),
+            h("input", {
+              className: "agenttalk-input",
+              disabled,
+              min: 1,
+              max: 100,
+              onChange: function (event) {
+                setMaxConcurrentSessions(event.target.value);
+              },
+              type: "number",
+              value: maxConcurrentSessions,
+            }),
+            h("div", { className: "agenttalk-note" }, "Caps simultaneous AgentTalk wake sessions handled by this Hermes runtime."),
+          ),
+          h("div", { className: "agenttalk-field" },
             h("div", { className: "agenttalk-field-row" },
               h("label", { className: "agenttalk-field-label" }, "Wake Prompt"),
               h(Button, {
@@ -526,6 +585,7 @@
                   openWakeRiskAccepted: openWake,
                   wakePromptTemplate: wakePromptText,
                   hermesToolsets: toolsetsValue,
+                  maxConcurrentSessions: maxConcurrentSessions,
                 };
                 if (openWakeApprovalPassphrase) {
                   body.openWakeApprovalPassphrase = openWakeApprovalPassphrase;
@@ -616,6 +676,12 @@
           ),
           chatError ? h("div", { className: "agenttalk-error" }, chatError) : null,
           selectedChat ? h("div", { className: "agenttalk-chat-window" },
+            h("div", { className: "agenttalk-chat-session-meta" },
+              shortText(selectedChat.directionLabel, "AgentTalk session") + " - " +
+              shortText(selectedChat.peer && selectedChat.peer.label, "AgentTalk peer") + " - " +
+              formatDate(selectedChat.startedAt || selectedChat.createdAt) +
+              (sequenceLabel(selectedChat) ? " - " + sequenceLabel(selectedChat) : "")
+            ),
             chatMessages.length ? chatMessages.map(function (message, index) {
               const isHermes = Boolean(message.isHermes);
               return h("div", {
@@ -630,12 +696,37 @@
                 ),
               );
             }) : h("div", { className: "agenttalk-empty" }, chatBusy ? "Loading messages" : "No messages found"),
-          ) : h("div", { className: "agenttalk-session-list" },
-            chatSessions.length ? chatSessions.map(function (session) {
+          ) : h(React.Fragment, null,
+            h("div", { className: "agenttalk-chat-filters" },
+              h("select", {
+                className: "agenttalk-select",
+                disabled: Boolean(chatBusy),
+                onChange: function (event) {
+                  setChatFilter(event.target.value);
+                },
+                value: chatFilter,
+              },
+                h("option", { value: "all" }, "All sessions"),
+                h("option", { value: "wake" }, "Wake sessions"),
+                h("option", { value: "manual_or_initiated" }, "Manual or initiated"),
+              ),
+              h("input", {
+                className: "agenttalk-input",
+                disabled: Boolean(chatBusy),
+                onChange: function (event) {
+                  setChatSearch(event.target.value);
+                },
+                placeholder: "Filter by peer, agent ID, wake ID",
+                spellCheck: false,
+                value: chatSearch,
+              }),
+            ),
+            h("div", { className: "agenttalk-session-list" },
+            filteredChatSessions.length ? filteredChatSessions.map(function (session) {
               return h("button", {
                 className: "agenttalk-session",
                 disabled: Boolean(chatBusy),
-                key: session.conversationId,
+                key: session.sessionId || session.conversationId,
                 onClick: function () {
                   return openChat(session);
                 },
@@ -644,12 +735,17 @@
                 h("div", { className: "agenttalk-session-main" },
                   h("div", { className: "agenttalk-session-title" }, shortText(session.title, "Conversation " + session.conversationId)),
                   h("div", { className: "agenttalk-session-meta" },
-                    shortText(session.peer && session.peer.label, "AgentTalk peer") + " - " + shortText(session.directionLabel, "AgentTalk chat")
+                    [
+                      shortText(session.peer && session.peer.label, "AgentTalk peer"),
+                      shortText(session.directionLabel, "AgentTalk chat"),
+                      sequenceLabel(session),
+                    ].filter(Boolean).join(" - ")
                   ),
                 ),
                 h("div", { className: "agenttalk-session-date" }, formatDate(session.lastActivity || session.createdAt)),
               );
-            }) : h("div", { className: "agenttalk-empty" }, chatBusy ? "Loading chats" : "No AgentTalk chats found"),
+            }) : h("div", { className: "agenttalk-empty" }, chatBusy ? "Loading chats" : "No AgentTalk sessions found"),
+            ),
           ),
         ),
         h("div", { className: "agenttalk-status" },

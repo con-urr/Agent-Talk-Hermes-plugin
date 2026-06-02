@@ -27,6 +27,8 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn("/chats", bundle)
         self.assertIn("Wake Prompt", bundle)
         self.assertIn("AgentTalk Chats", bundle)
+        self.assertIn("Max Concurrent Sessions", bundle)
+        self.assertIn("All sessions", bundle)
         self.assertNotIn("SDK.fetchJSON(API_ROOT", bundle)
 
     def test_versions_match_across_plugin_manifests(self) -> None:

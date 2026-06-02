@@ -161,6 +161,18 @@ def normalize_busy_command_timeout_ms(value: Any | None = None) -> int:
     return parsed
 
 
+def normalize_max_concurrent_sessions(value: Any | None = None) -> int:
+    if value in (None, ""):
+        return 1
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Max concurrent AgentTalk sessions must be an integer from 1 to 100.") from exc
+    if parsed < 1 or parsed > 100:
+        raise ValueError("Max concurrent AgentTalk sessions must be an integer from 1 to 100.")
+    return parsed
+
+
 def normalize_wake_prompt_template(value: Any | None = None) -> str:
     if value is None:
         return STANDARD_WAKE_PROMPT_TEMPLATE
@@ -547,6 +559,7 @@ def _new_agent(
     blocked_wake_sender_agent_ids: Any = None,
     busy_command: Any = None,
     busy_command_timeout_ms: Any = None,
+    max_concurrent_sessions: Any = None,
 ) -> dict[str, Any]:
     normalized_busy_command = normalize_busy_command(busy_command)
     connector: dict[str, Any] = {
@@ -573,7 +586,7 @@ def _new_agent(
         "connector": connector,
         "enabled": enabled,
         "autoInit": True,
-        "maxConcurrentWakeJobs": 1,
+        "maxConcurrentWakeJobs": normalize_max_concurrent_sessions(max_concurrent_sessions),
         "connectorTimeoutMs": DEFAULT_CONNECTOR_TIMEOUT_MS,
         "wake": {
             "enabled": wake_enabled,
@@ -604,6 +617,7 @@ def ensure_agent_config(
     blocked_wake_sender_agent_ids: Any = None,
     busy_command: Any = None,
     busy_command_timeout_ms: Any = None,
+    max_concurrent_sessions: Any = None,
     force: bool = False,
 ) -> dict[str, Any]:
     config = load_config()
@@ -633,6 +647,7 @@ def ensure_agent_config(
                 busy_command_timeout_ms=busy_command_timeout_ms
                 if busy_command is not None
                 else default_busy_command_timeout_ms(),
+                max_concurrent_sessions=max_concurrent_sessions,
             )
         )
     else:
@@ -650,6 +665,7 @@ def ensure_agent_config(
                 busy_command_timeout_ms=busy_command_timeout_ms
                 if busy_command is not None
                 else default_busy_command_timeout_ms(),
+                max_concurrent_sessions=max_concurrent_sessions,
             )
         else:
             agent["handle"] = resolved_handle
@@ -704,7 +720,10 @@ def ensure_agent_config(
             else:
                 wake.setdefault("blockedWakeSenderAgentIds", [])
             agent.setdefault("autoInit", True)
-            agent.setdefault("maxConcurrentWakeJobs", 1)
+            if max_concurrent_sessions is not None:
+                agent["maxConcurrentWakeJobs"] = normalize_max_concurrent_sessions(max_concurrent_sessions)
+            else:
+                agent.setdefault("maxConcurrentWakeJobs", 1)
             agent.setdefault("connectorTimeoutMs", DEFAULT_CONNECTOR_TIMEOUT_MS)
 
     config["defaultWakePolicy"] = {
@@ -837,6 +856,7 @@ def set_wake_behavior(
     *,
     wake_prompt_template: Any | None = None,
     hermes_toolsets: Any | None = None,
+    max_concurrent_sessions: Any | None = None,
 ) -> dict[str, Any]:
     config = load_config()
     agent = _agent(config)
@@ -851,6 +871,8 @@ def set_wake_behavior(
         connector["wakePromptTemplate"] = normalize_wake_prompt_template(wake_prompt_template)
     if hermes_toolsets is not None:
         connector["hermesToolsets"] = normalize_hermes_toolsets(hermes_toolsets)
+    if max_concurrent_sessions is not None:
+        agent["maxConcurrentWakeJobs"] = normalize_max_concurrent_sessions(max_concurrent_sessions)
     save_config(config)
     return status()
 
@@ -1199,39 +1221,229 @@ def _string_value(*values: Any) -> str | None:
     return None
 
 
-def _wake_run_index(limit: int = 200) -> dict[str, dict[str, Any]]:
+def _json_from_file(path: Path) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _int_value(*values: Any) -> int | None:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return int(str(value))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _file_time(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _result_connector_metadata(result: dict[str, Any] | None) -> dict[str, Any]:
+    metadata = result.get("metadata") if isinstance(result, dict) else None
+    connector = metadata.get("connectorMetadata") if isinstance(metadata, dict) else None
+    return connector if isinstance(connector, dict) else {}
+
+
+def _session_end_sequence(result: dict[str, Any] | None) -> int | None:
+    connector = _result_connector_metadata(result)
+    return _int_value(
+        connector.get("lastHandledSequence"),
+        connector.get("handledThroughSequence"),
+        connector.get("readThroughSequence"),
+        connector.get("maxSequence"),
+    )
+
+
+def _wake_run_sessions(limit: int = 300) -> list[dict[str, Any]]:
     config = load_config()
     run_dir = Path(config.get("runDir") or supervisor_home() / "runs")
     if not run_dir.exists():
-        return {}
+        return []
     candidates = sorted(
         run_dir.rglob("input.json"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )[:limit]
-    index: dict[str, dict[str, Any]] = {}
+    sessions: list[dict[str, Any]] = []
     for input_path in candidates:
-        try:
-            parsed = json.loads(input_path.read_text(encoding="utf-8"))
-        except Exception:
+        parsed = _json_from_file(input_path)
+        if parsed is None:
             continue
         wake = parsed.get("wake") if isinstance(parsed, dict) else None
         if not isinstance(wake, dict):
             continue
         conversation_id = _string_value(wake.get("conversationId"), wake.get("conversation_id"))
-        if not conversation_id or conversation_id in index:
+        if not conversation_id:
             continue
-        index[conversation_id] = {
-            "direction": "wake",
-            "directionLabel": "Wake",
-            "wakeId": _string_value(wake.get("wakeId"), wake.get("wake_id")),
-            "senderAgentId": _string_value(wake.get("senderAgentId"), wake.get("sender_agent_id")),
-            "reason": _string_value(wake.get("reason")),
-            "runPath": str(input_path.parent),
-            "createdAt": datetime.fromtimestamp(input_path.stat().st_mtime, timezone.utc)
-            .isoformat(timespec="milliseconds")
-            .replace("+00:00", "Z"),
-        }
+        result_path = input_path.parent / "result.json"
+        result = _json_from_file(result_path)
+        context_messages = parsed.get("contextMessages") if isinstance(parsed.get("contextMessages"), list) else []
+        first_context = next((row for row in context_messages if isinstance(row, dict)), {})
+        connector_metadata = _result_connector_metadata(result)
+        wake_id = _string_value(wake.get("wakeId"), wake.get("wake_id"))
+        attempt_id = _string_value(parsed.get("attemptId"))
+        start_sequence = _int_value(wake.get("minSequence"), wake.get("maxSequence"), first_context.get("sequence"))
+        end_sequence = _session_end_sequence(result)
+        started_at = _string_value(
+            first_context.get("sent"),
+            first_context.get("sentAt"),
+            wake.get("nextAttemptAt"),
+            wake.get("updatedAt"),
+        ) or _file_time(input_path)
+        ended_at = _file_time(result_path) if result_path.exists() else None
+        peer_label = _string_value(first_context.get("authorLabel"), first_context.get("author"), "AgentTalk peer")
+        session_id = f"{wake_id or input_path.parent.parent.name}:{attempt_id or input_path.parent.name}"
+        sessions.append(
+            {
+                "sessionId": session_id,
+                "conversationId": conversation_id,
+                "title": f"Wake from {peer_label}",
+                "kind": "direct",
+                "startedAt": started_at,
+                "endedAt": ended_at,
+                "lastActivity": ended_at or started_at,
+                "startSequence": str(start_sequence) if start_sequence is not None else None,
+                "endSequence": str(end_sequence) if end_sequence is not None else None,
+                "direction": "wake",
+                "directionLabel": "Wake",
+                "peer": {
+                    "label": peer_label,
+                    "agentId": _string_value(wake.get("senderAgentId"), wake.get("sender_agent_id")),
+                },
+                "wake": {
+                    "direction": "wake",
+                    "directionLabel": "Wake",
+                    "wakeId": wake_id,
+                    "senderAgentId": _string_value(wake.get("senderAgentId"), wake.get("sender_agent_id")),
+                    "reason": _string_value(wake.get("reason")),
+                    "runPath": str(input_path.parent),
+                    "createdAt": started_at,
+                    "attemptId": attempt_id,
+                },
+                "result": {
+                    "ok": result.get("ok") if isinstance(result, dict) else None,
+                    "handled": result.get("handled") if isinstance(result, dict) else None,
+                    "replySent": result.get("replySent") if isinstance(result, dict) else None,
+                    "message": _string_value(result.get("message")) if isinstance(result, dict) else None,
+                    "metadata": connector_metadata,
+                },
+                "raw": {
+                    "wake": wake,
+                    "inputPath": str(input_path),
+                    "resultPath": str(result_path) if result_path.exists() else None,
+                },
+            }
+        )
+
+    by_conversation: dict[str, list[dict[str, Any]]] = {}
+    for session in sessions:
+        by_conversation.setdefault(str(session["conversationId"]), []).append(session)
+    for rows in by_conversation.values():
+        rows.sort(key=lambda row: _int_value(row.get("startSequence")) or -1)
+        for index, row in enumerate(rows):
+            if row.get("endSequence"):
+                continue
+            next_start = _int_value(rows[index + 1].get("startSequence")) if index + 1 < len(rows) else None
+            if next_start is not None and next_start > 0:
+                row["derivedEndSequence"] = str(next_start - 1)
+    sessions.sort(key=lambda row: row.get("lastActivity") or row.get("startedAt") or "", reverse=True)
+    return sessions
+
+
+def _conversation_rows() -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any]]:
+    payload = _run_agenttalk(["conversation", "list", "--json"])
+    parsed = payload.get("json") if isinstance(payload, dict) else None
+    if not isinstance(parsed, dict):
+        return None, [], payload
+    conversations = parsed.get("conversations") if isinstance(parsed.get("conversations"), list) else []
+    rows = [row for row in conversations if isinstance(row, dict)]
+    return parsed, rows, payload
+
+
+def _conversation_session(row: dict[str, Any]) -> dict[str, Any] | None:
+    conversation_id = _string_value(row.get("id"), row.get("conversationId"))
+    if not conversation_id:
+        return None
+    return {
+        "sessionId": f"conversation:{conversation_id}",
+        "conversationId": conversation_id,
+        "title": _string_value(row.get("title")) or f"Conversation {conversation_id}",
+        "kind": _string_value(row.get("kind")) or "direct",
+        "startedAt": _string_value(row.get("createdAt")),
+        "lastActivity": _string_value(row.get("lastActivity"), row.get("updatedAt"), row.get("createdAt")),
+        "createdAt": _string_value(row.get("createdAt")),
+        "memberCount": row.get("memberCount"),
+        "direction": "manual_or_initiated",
+        "directionLabel": "Manual or initiated",
+        "peer": {
+            "label": _string_value(row.get("peerHandle"), row.get("peerLabel"), row.get("title")) or "AgentTalk peer",
+            "agentId": None,
+        },
+        "wake": None,
+        "raw": row,
+    }
+
+
+def _session_by_id(session_id: str) -> dict[str, Any] | None:
+    for session in _wake_run_sessions():
+        if session.get("sessionId") == session_id:
+            return session
+    _, conversations, _ = _conversation_rows()
+    for conversation in conversations:
+        session = _conversation_session(conversation)
+        if session and session.get("sessionId") == session_id:
+            return session
+    return None
+
+
+def _message_sequence(message: dict[str, Any]) -> int | None:
+    return _int_value(message.get("sequence"))
+
+
+def _filter_messages_for_session(messages: list[dict[str, Any]], session: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not session or str(session.get("sessionId", "")).startswith("conversation:"):
+        return messages
+    start = _int_value(session.get("startSequence"))
+    end = _int_value(session.get("endSequence"), session.get("derivedEndSequence"))
+    if start is None and end is None:
+        return messages
+    filtered: list[dict[str, Any]] = []
+    for message in messages:
+        sequence = _message_sequence(message)
+        if sequence is None:
+            continue
+        if start is not None and sequence < start:
+            continue
+        if end is not None and sequence > end:
+            continue
+        filtered.append(message)
+    return filtered
+
+
+def _wake_run_index(limit: int = 200) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for session in _wake_run_sessions(limit):
+        conversation_id = str(session.get("conversationId") or "")
+        if conversation_id and conversation_id not in index:
+            index[conversation_id] = {
+                "direction": session.get("direction"),
+                "directionLabel": session.get("directionLabel"),
+                "wakeId": (session.get("wake") or {}).get("wakeId") if isinstance(session.get("wake"), dict) else None,
+                "senderAgentId": (session.get("wake") or {}).get("senderAgentId")
+                if isinstance(session.get("wake"), dict)
+                else None,
+                "reason": (session.get("wake") or {}).get("reason") if isinstance(session.get("wake"), dict) else None,
+                "runPath": (session.get("wake") or {}).get("runPath") if isinstance(session.get("wake"), dict) else None,
+                "createdAt": session.get("startedAt"),
+            }
     return index
 
 
@@ -1256,8 +1468,9 @@ def _normalize_chat_message(message: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def chat_messages(conversation_id: str, *, limit: int = 100) -> dict[str, Any]:
-    safe_limit = max(1, min(int(limit), 100))
+def chat_messages(conversation_id: str, *, limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit), 200))
+    session = _session_by_id(session_id) if session_id else None
     payload = _run_agenttalk(["conversation", "messages", str(conversation_id), "--limit", str(safe_limit), "--json"])
     parsed = payload.get("json") if isinstance(payload, dict) else None
     if not isinstance(parsed, dict):
@@ -1270,9 +1483,12 @@ def chat_messages(conversation_id: str, *, limit: int = 100) -> dict[str, Any]:
         }
     rows = parsed.get("messages") if isinstance(parsed.get("messages"), list) else []
     messages = [_normalize_chat_message(row) for row in rows if isinstance(row, dict)]
+    messages = _filter_messages_for_session(messages, session)
     return {
         "ok": bool(parsed.get("ok", payload.get("ok", False))),
         "conversationId": str(conversation_id),
+        "sessionId": session_id,
+        "session": session,
         "messages": messages,
         "page": parsed.get("page") if isinstance(parsed.get("page"), dict) else None,
         "lastSequence": parsed.get("lastSequence"),
@@ -1284,8 +1500,7 @@ def chat_messages(conversation_id: str, *, limit: int = 100) -> dict[str, Any]:
 
 def chat_sessions(*, limit: int = 25) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit), 50))
-    payload = _run_agenttalk(["conversation", "list", "--json"])
-    parsed = payload.get("json") if isinstance(payload, dict) else None
+    parsed, conversations, payload = _conversation_rows()
     if not isinstance(parsed, dict):
         return {
             "ok": False,
@@ -1293,34 +1508,18 @@ def chat_sessions(*, limit: int = 25) -> dict[str, Any]:
             "error": payload.get("error") or payload.get("stderr") or "AgentTalk conversation list returned no JSON",
             "raw": payload,
         }
-    conversations = parsed.get("conversations") if isinstance(parsed.get("conversations"), list) else []
-    wake_index = _wake_run_index()
-    sessions: list[dict[str, Any]] = []
-    for row in conversations[:safe_limit]:
-        if not isinstance(row, dict):
+    run_sessions = _wake_run_sessions()
+    run_conversation_ids = {str(row.get("conversationId")) for row in run_sessions}
+    sessions = list(run_sessions)
+    for row in conversations:
+        conversation = _conversation_session(row)
+        if not conversation:
             continue
-        conversation_id = _string_value(row.get("id"), row.get("conversationId"))
-        if not conversation_id:
+        if str(conversation.get("conversationId")) in run_conversation_ids:
             continue
-        wake = wake_index.get(conversation_id)
-        sessions.append(
-            {
-                "conversationId": conversation_id,
-                "title": _string_value(row.get("title")) or f"Conversation {conversation_id}",
-                "kind": _string_value(row.get("kind")) or "direct",
-                "lastActivity": _string_value(row.get("lastActivity"), row.get("updatedAt"), row.get("createdAt")),
-                "createdAt": _string_value(row.get("createdAt")),
-                "memberCount": row.get("memberCount"),
-                "direction": wake.get("direction") if wake else "manual_or_initiated",
-                "directionLabel": wake.get("directionLabel") if wake else "Manual or initiated",
-                "peer": {
-                    "label": _string_value(row.get("peerHandle"), row.get("peerLabel"), row.get("title")) or "AgentTalk peer",
-                    "agentId": wake.get("senderAgentId") if wake else None,
-                },
-                "wake": wake,
-                "raw": row,
-            }
-        )
+        sessions.append(conversation)
+    sessions.sort(key=lambda row: row.get("lastActivity") or row.get("startedAt") or row.get("createdAt") or "", reverse=True)
+    sessions = sessions[:safe_limit]
     return {
         "ok": bool(parsed.get("ok", payload.get("ok", False))),
         "sessions": sessions,
@@ -1463,6 +1662,9 @@ def status(*, live: bool = False) -> dict[str, Any]:
     )
     wake_prompt_template = normalize_wake_prompt_template(connector.get("wakePromptTemplate"))
     hermes_toolsets = normalize_hermes_toolsets(connector.get("hermesToolsets"))
+    max_concurrent_sessions = normalize_max_concurrent_sessions(
+        agent.get("maxConcurrentWakeJobs") if agent else None
+    )
     return {
         "ok": True,
         "plugin": PLUGIN_ID,
@@ -1480,9 +1682,10 @@ def status(*, live: bool = False) -> dict[str, Any]:
             "accessMode": normalize_wake_access_mode(wake.get("accessMode")),
             "allowedWakeSenderAgentIds": allowed_wake_sender_agent_ids,
             "blockedWakeSenderAgentIds": blocked_wake_sender_agent_ids,
-            "maxConcurrentWakeJobs": agent.get("maxConcurrentWakeJobs") if agent else None,
+            "maxConcurrentWakeJobs": max_concurrent_sessions,
             "latencyMs": wake.get("latencyMs"),
         },
+        "maxConcurrentSessions": max_concurrent_sessions,
         "effectiveWake": live_agent.get("effectiveWake") if live_agent else None,
         "drift": live_agent.get("drift") if live_agent else None,
         "agentTalkAgentId": (live_agent.get("agentTalkAgentId") if live_agent else None) or state.get("agentId"),

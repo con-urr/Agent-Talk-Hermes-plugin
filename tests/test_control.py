@@ -309,13 +309,111 @@ class ControlTests(unittest.TestCase):
         result = control.set_wake_behavior(
             wake_prompt_template="Custom {{conversationId}}",
             hermes_toolsets="terminal,agenttalk,memory",
+            max_concurrent_sessions=5,
         )
 
         self.assertEqual(result["wakePrompt"]["template"], "Custom {{conversationId}}\n")
         self.assertEqual(result["hermesToolsets"], ["terminal", "agenttalk", "memory"])
+        self.assertEqual(result["maxConcurrentSessions"], 5)
         config = control.load_config()
         self.assertEqual(config["agents"][0]["connector"]["wakePromptTemplate"], "Custom {{conversationId}}\n")
         self.assertEqual(config["agents"][0]["connector"]["hermesToolsets"], ["terminal", "agenttalk", "memory"])
+        self.assertEqual(config["agents"][0]["maxConcurrentWakeJobs"], 5)
+
+    def test_chat_sessions_split_wake_runs_for_same_conversation(self) -> None:
+        control.ensure_agent_config()
+        run_root = control.supervisor_home() / "runs"
+        first_run = run_root / "local-direct_4097_4100_10" / "local-direct_4097_4100_10_attempt-1"
+        second_run = run_root / "local-direct_4097_4200_20" / "local-direct_4097_4200_20_attempt-1"
+        first_run.mkdir(parents=True)
+        second_run.mkdir(parents=True)
+
+        def write_run(path: Path, wake_id: str, attempt_id: str, sequence: str, last: str) -> None:
+            (path / "input.json").write_text(
+                json.dumps(
+                    {
+                        "attemptId": attempt_id,
+                        "wake": {
+                            "wakeId": wake_id,
+                            "conversationId": "4097",
+                            "senderAgentId": "agt_support",
+                            "minSequence": sequence,
+                            "maxSequence": sequence,
+                            "reason": "direct_message",
+                            "nextAttemptAt": f"2026-06-02T00:00:{sequence}.000Z",
+                        },
+                        "contextMessages": [
+                            {
+                                "conversationId": "4097",
+                                "sequence": sequence,
+                                "authorLabel": "support",
+                                "text": f"wake {sequence}",
+                                "sent": f"2026-06-02T00:00:{sequence}.000Z",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (path / "result.json").write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "handled": True,
+                        "replySent": True,
+                        "metadata": {"connectorMetadata": {"lastHandledSequence": last}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+        write_run(first_run, "local-direct:4097:4100:10", "local-direct:4097:4100:10:attempt-1", "10", "11")
+        write_run(second_run, "local-direct:4097:4200:20", "local-direct:4097:4200:20:attempt-1", "20", "21")
+
+        def fake_run(args, **kwargs):
+            if args[:2] == ["conversation", "list"]:
+                return {
+                    "ok": True,
+                    "json": {
+                        "ok": True,
+                        "conversations": [
+                            {
+                                "id": "4097",
+                                "kind": "direct",
+                                "title": "support <-> research",
+                                "createdAt": "2026-06-02T00:00:00.000Z",
+                                "lastActivity": "2026-06-02T00:00:21.000Z",
+                                "memberCount": 2,
+                            }
+                        ],
+                    },
+                }
+            if args[:2] == ["conversation", "messages"]:
+                return {
+                    "ok": True,
+                    "json": {
+                        "ok": True,
+                        "messages": [
+                            {"id": "10", "conversationId": "4097", "sequence": "10", "authorLabel": "support", "text": "wake 10"},
+                            {"id": "11", "conversationId": "4097", "sequence": "11", "authorLabel": "research", "text": "reply 11"},
+                            {"id": "20", "conversationId": "4097", "sequence": "20", "authorLabel": "support", "text": "wake 20"},
+                            {"id": "21", "conversationId": "4097", "sequence": "21", "authorLabel": "research", "text": "reply 21"},
+                        ],
+                    },
+                }
+            return {"ok": False, "error": "unexpected command"}
+
+        with patch("agenttalk_hermes_plugin.control._run_agenttalk", side_effect=fake_run):
+            sessions = control.chat_sessions(limit=10)
+            self.assertTrue(sessions["ok"])
+            self.assertEqual(len(sessions["sessions"]), 2)
+            self.assertEqual({row["conversationId"] for row in sessions["sessions"]}, {"4097"})
+            self.assertEqual(len({row["sessionId"] for row in sessions["sessions"]}), 2)
+            second = next(row for row in sessions["sessions"] if row["startSequence"] == "20")
+            messages = control.chat_messages("4097", session_id=second["sessionId"])
+
+        self.assertTrue(messages["ok"])
+        self.assertEqual([row["sequence"] for row in messages["messages"]], ["20", "21"])
 
     def test_wake_prompt_preview_renders_placeholders(self) -> None:
         preview = control.render_wake_prompt_preview("Wake {{conversationId}} from {{senderAgentId}}")

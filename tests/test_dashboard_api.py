@@ -128,6 +128,7 @@ class DashboardApiTests(unittest.TestCase):
                     "blockedWakeSenderAgentIds": "agent-c",
                     "wakePromptTemplate": "Custom {{conversationId}}",
                     "hermesToolsets": "terminal,agenttalk",
+                    "maxConcurrentSessions": 3,
                 }
             )
         )
@@ -137,6 +138,7 @@ class DashboardApiTests(unittest.TestCase):
         self.assertEqual(result["wakeAccess"]["blockedWakeSenderAgentIds"], ["agent-c"])
         self.assertEqual(result["wakePrompt"]["template"], "Custom {{conversationId}}\n")
         self.assertEqual(result["hermesToolsets"], ["terminal", "agenttalk"])
+        self.assertEqual(result["maxConcurrentSessions"], 3)
 
     def test_wake_prompt_preview_route(self) -> None:
         api = load_plugin_api()

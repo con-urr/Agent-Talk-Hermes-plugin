@@ -252,6 +252,12 @@
   gap: 0.5rem;
 }
 
+.agenttalk-chat-filters {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
 .agenttalk-session {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -283,6 +289,7 @@
 
 .agenttalk-session-meta,
 .agenttalk-session-date,
+.agenttalk-chat-session-meta,
 .agenttalk-message-meta {
   color: var(--color-muted-foreground);
   font-size: 0.8125rem;
@@ -291,6 +298,11 @@
 
 .agenttalk-session-meta {
   margin-top: 0.25rem;
+}
+
+.agenttalk-chat-session-meta {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 0.625rem;
 }
 
 .agenttalk-chat-window {
@@ -381,6 +393,10 @@
   }
 
   .agenttalk-session {
+    grid-template-columns: 1fr;
+  }
+
+  .agenttalk-chat-filters {
     grid-template-columns: 1fr;
   }
 

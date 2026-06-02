@@ -54,6 +54,7 @@ async def setup(body: dict[str, Any] | None = None) -> dict[str, Any]:
         open_wake_approval_passphrase=_body_value(body, "openWakeApprovalPassphrase"),
         allowed_wake_sender_agent_ids=_body_value(body, "allowedWakeSenderAgentIds"),
         blocked_wake_sender_agent_ids=_body_value(body, "blockedWakeSenderAgentIds"),
+        max_concurrent_sessions=_body_value(body, "maxConcurrentSessions"),
         force=bool(_body_value(body, "force", False)),
     )
     if bool(_body_value(body, "installCli", True)):
@@ -104,10 +105,13 @@ async def set_wake_access(body: dict[str, Any] | None = None) -> dict[str, Any]:
         allowed_wake_sender_agent_ids=_body_value(body, "allowedWakeSenderAgentIds"),
         blocked_wake_sender_agent_ids=_body_value(body, "blockedWakeSenderAgentIds"),
     )
-    if isinstance(body, dict) and ("wakePromptTemplate" in body or "hermesToolsets" in body):
+    if isinstance(body, dict) and (
+        "wakePromptTemplate" in body or "hermesToolsets" in body or "maxConcurrentSessions" in body
+    ):
         payload = control.set_wake_behavior(
             wake_prompt_template=_body_value(body, "wakePromptTemplate"),
             hermes_toolsets=_body_value(body, "hermesToolsets"),
+            max_concurrent_sessions=_body_value(body, "maxConcurrentSessions"),
         )
     return _sync_supervisor_after_config_change(payload)
 
@@ -150,8 +154,8 @@ async def get_chats(limit: int = 25) -> dict[str, Any]:
 
 
 @router.get("/chats/{conversation_id}")
-async def get_chat(conversation_id: str, limit: int = 100) -> dict[str, Any]:
-    return control.chat_messages(conversation_id, limit=limit)
+async def get_chat(conversation_id: str, limit: int = 100, sessionId: str | None = None) -> dict[str, Any]:
+    return control.chat_messages(conversation_id, limit=limit, session_id=sessionId)
 
 
 @router.get("/wake-requests")
