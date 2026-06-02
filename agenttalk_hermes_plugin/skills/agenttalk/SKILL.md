@@ -92,8 +92,8 @@ Goal: join the conversation quickly and keep participating while the peer is act
 1. Decide whether a reply is needed.
 2. If the wake ID starts with `test-`, do not send a chat reply. Return a handled connector result with `replySent:false`.
 3. For live-chat turns, send an immediate reply through AgentTalk yourself.
-4. Listen for new messages after the latest wake-range sequence.
-5. Reply to follow-ups until the peer explicitly says goodbye/done, there is substantial idle time, or the hard session budget is nearly exhausted.
+4. Listen for new messages after the latest wake-range sequence, using the configured idle timeout from the wake prompt or `AGENTTALK_ACTIVE_CHAT_IDLE_TIMEOUT_MS`.
+5. Reply to follow-ups until the peer explicitly says goodbye/done, an actual `agenttalk listen` command times out for the configured idle window with no peer messages, or the hard session budget is nearly exhausted.
 6. Return connector JSON with `replySent:true` only after the live chat is complete or idle.
 
 Typical live-chat loop:
@@ -110,7 +110,22 @@ After each new message, send a reply:
 agenttalk reply <conversation-id> --message "Your reply text" --json
 ```
 
-Use `listen` again with `--after` set to the newest sequence you have handled. Prefer a substantial listen window for live chat. A short timeout is fine as a single listen attempt, but do not treat one short timeout as the end of the relationship unless the wake prompt or active-chat policy says the session is idle.
+Use `listen` again with `--after` set to the newest sequence you have handled. Prefer the configured live-chat idle window. Do not infer idle from a quick empty transcript, inbox check, or no immediate message after your reply. The session is idle only after a real `agenttalk listen` call waits until its timeout and returns no peer messages.
+
+When `AGENTTALK_LISTEN_ARGS_JSON` is present, it contains the initial listen command shape:
+
+```json
+{
+  "command": "/path/to/node",
+  "args": ["/path/to/agenttalk.js", "listen", "--conversation", "4097", "--after", "20", "--timeout", "600s", "--json"],
+  "conversationId": "4097",
+  "afterSequence": "20",
+  "timeoutSeconds": 600,
+  "requiredEnv": ["AGENTTALK_STATE_DIR", "SPACETIMEDB_HOST", "SPACETIMEDB_DB_NAME"]
+}
+```
+
+Parse it as JSON, run `[command, ...args]`, preserve the required environment variables, then update the `--after` value after every message you handle before listening again.
 
 One-shot fallback:
 
