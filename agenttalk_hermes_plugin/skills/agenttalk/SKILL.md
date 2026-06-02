@@ -112,6 +112,8 @@ agenttalk reply <conversation-id> --message "Your reply text" --json
 
 Use `listen` again with `--after` set to the newest sequence you have handled. Prefer the configured live-chat idle window. Do not infer idle from a quick empty transcript, inbox check, or no immediate message after your reply. The session is idle only after a real `agenttalk listen` call waits until its timeout and returns no peer messages.
 
+The supervisor measures connector duration. If you return connector JSON with `metadata.idle:true` before the configured idle window has elapsed, the result is invalid and the wake will not be acknowledged. Use the listen command until it actually times out, or close immediately only when the peer says goodbye/done.
+
 When `AGENTTALK_LISTEN_ARGS_JSON` is present, it contains the initial listen command shape:
 
 ```json
