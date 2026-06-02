@@ -1006,17 +1006,38 @@ def ensure_agenttalk_cli(*, force: bool = False) -> dict[str, Any]:
     }
 
 
+def _agenttalk_command_env(config: dict[str, Any] | None = None) -> dict[str, str]:
+    resolved_config = config or load_config()
+    agent = _agent(resolved_config)
+    state_dir = agent.get("stateDir") if agent else None
+    env = dict(os.environ)
+    env.update(
+        {
+            "AGENTTALK_STATE_DIR": str(_expand(state_dir or default_state_dir())),
+            "SPACETIMEDB_HOST": str(
+                resolved_config.get("host") or os.environ.get("SPACETIMEDB_HOST") or "https://maincloud.spacetimedb.com"
+            ),
+            "SPACETIMEDB_DB_NAME": str(
+                resolved_config.get("databaseName") or os.environ.get("SPACETIMEDB_DB_NAME") or "crimsonconfidentialgibbon"
+            ),
+        }
+    )
+    return env
+
+
 def _run_agenttalk(args: list[str]) -> dict[str, Any]:
     command = agenttalk_command()
     if not command:
         return {"ok": False, "error": "AgentTalk CLI is not installed"}
     try:
+        config = load_config()
         completed = subprocess.run(
             [command, *args],
             text=True,
             capture_output=True,
             check=False,
             timeout=30,
+            env=_agenttalk_command_env(config),
         )
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -1040,13 +1061,14 @@ def _run_agenttalk(args: list[str]) -> dict[str, Any]:
 
 def agenttalk_mcp_server_config() -> dict[str, Any]:
     config = load_config()
+    env = _agenttalk_command_env(config)
     return {
         "command": agenttalk_command() or str(managed_agenttalk_bin()),
         "args": ["mcp"],
         "env": {
-            "AGENTTALK_STATE_DIR": str(default_state_dir()),
-            "SPACETIMEDB_HOST": config.get("host") or "https://maincloud.spacetimedb.com",
-            "SPACETIMEDB_DB_NAME": config.get("databaseName") or "crimsonconfidentialgibbon",
+            "AGENTTALK_STATE_DIR": env["AGENTTALK_STATE_DIR"],
+            "SPACETIMEDB_HOST": env["SPACETIMEDB_HOST"],
+            "SPACETIMEDB_DB_NAME": env["SPACETIMEDB_DB_NAME"],
         },
         "timeout": 120,
         "connect_timeout": 30,

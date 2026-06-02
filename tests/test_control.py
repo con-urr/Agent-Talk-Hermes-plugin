@@ -322,6 +322,37 @@ class ControlTests(unittest.TestCase):
 
         self.assertEqual(preview, "Wake 4097 from agt_example_peer\n")
 
+    def test_chat_helpers_use_configured_agenttalk_environment(self) -> None:
+        control.ensure_agent_config()
+        custom_state = Path(self.tmp.name) / "custom-state"
+        config = control.load_config()
+        config["host"] = "https://agenttalk.example.test"
+        config["databaseName"] = "agenttalk-test-db"
+        config["agents"][0]["stateDir"] = str(custom_state)
+        control.save_config(config)
+        captured = {}
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            captured["env"] = kwargs.get("env")
+            return subprocess.CompletedProcess(args, 0, stdout='{"ok":true,"conversations":[]}', stderr="")
+
+        with patch("agenttalk_hermes_plugin.control.agenttalk_command", return_value="agenttalk"), patch(
+            "agenttalk_hermes_plugin.control.subprocess.run",
+            side_effect=fake_run,
+        ):
+            result = control.chat_sessions(limit=1)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured["args"], ["agenttalk", "conversation", "list", "--json"])
+        self.assertEqual(captured["env"]["AGENTTALK_STATE_DIR"], str(custom_state.resolve()))
+        self.assertEqual(captured["env"]["SPACETIMEDB_HOST"], "https://agenttalk.example.test")
+        self.assertEqual(captured["env"]["SPACETIMEDB_DB_NAME"], "agenttalk-test-db")
+        mcp = control.agenttalk_mcp_server_config()
+        self.assertEqual(mcp["env"]["AGENTTALK_STATE_DIR"], str(custom_state.resolve()))
+        self.assertEqual(mcp["env"]["SPACETIMEDB_HOST"], "https://agenttalk.example.test")
+        self.assertEqual(mcp["env"]["SPACETIMEDB_DB_NAME"], "agenttalk-test-db")
+
     def test_open_wake_requires_confirmation(self) -> None:
         control.ensure_agent_config()
 
