@@ -30,6 +30,10 @@ OPEN_WAKE_APPROVAL_DIGEST = "sha256"
 OPEN_WAKE_APPROVAL_KEY_LENGTH = 32
 OPEN_WAKE_APPROVAL_ITERATIONS = 210_000
 AGENTTALK_CLI_NPM_SPEC = "github:con-urr/pistils_chat_cli#main"
+DEFAULT_CONNECTOR_TIMEOUT_MS = 300_000
+DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS = 600_000
+DEFAULT_LIVE_CHAT_MAX_SESSION_MS = 3_600_000
+DEFAULT_STARTUP_TIMEOUT_MS = 60_000
 
 
 def _home() -> Path:
@@ -408,7 +412,14 @@ def _new_agent(
     busy_command_timeout_ms: Any = None,
 ) -> dict[str, Any]:
     normalized_busy_command = normalize_busy_command(busy_command)
-    connector: dict[str, Any] = {"sendReplyText": True}
+    connector: dict[str, Any] = {
+        "sendReplyText": True,
+        "hermesSkills": ["agenttalk:agenttalk"],
+        "liveChat": True,
+        "liveChatIdleTimeoutMs": DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS,
+        "liveChatMaxSessionMs": DEFAULT_LIVE_CHAT_MAX_SESSION_MS,
+        "startupTimeoutMs": DEFAULT_STARTUP_TIMEOUT_MS,
+    }
     if normalized_busy_command:
         connector["busyCommand"] = normalized_busy_command
         connector["busyCommandTimeoutMs"] = normalize_busy_command_timeout_ms(busy_command_timeout_ms)
@@ -423,7 +434,7 @@ def _new_agent(
         "enabled": enabled,
         "autoInit": True,
         "maxConcurrentWakeJobs": 1,
-        "connectorTimeoutMs": 300000,
+        "connectorTimeoutMs": DEFAULT_CONNECTOR_TIMEOUT_MS,
         "wake": {
             "enabled": wake_enabled,
             "accessMode": normalize_wake_access_mode(wake_access_mode),
@@ -508,6 +519,11 @@ def ensure_agent_config(
             agent["repoPath"] = resolved_repo or agent.get("repoPath")
             connector = agent.setdefault("connector", {})
             connector.setdefault("sendReplyText", True)
+            connector.setdefault("hermesSkills", ["agenttalk:agenttalk"])
+            connector.setdefault("liveChat", True)
+            connector.setdefault("liveChatIdleTimeoutMs", DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS)
+            connector.setdefault("liveChatMaxSessionMs", DEFAULT_LIVE_CHAT_MAX_SESSION_MS)
+            connector.setdefault("startupTimeoutMs", DEFAULT_STARTUP_TIMEOUT_MS)
             if busy_command is not None:
                 normalized_busy_command = normalize_busy_command(busy_command)
                 if normalized_busy_command:
@@ -546,7 +562,7 @@ def ensure_agent_config(
                 wake.setdefault("blockedWakeSenderAgentIds", [])
             agent.setdefault("autoInit", True)
             agent.setdefault("maxConcurrentWakeJobs", 1)
-            agent.setdefault("connectorTimeoutMs", 300000)
+            agent.setdefault("connectorTimeoutMs", DEFAULT_CONNECTOR_TIMEOUT_MS)
 
     config["defaultWakePolicy"] = {
         **_default_config()["defaultWakePolicy"],
@@ -567,6 +583,11 @@ def _agent(config: dict[str, Any]) -> dict[str, Any] | None:
 def _ensure_connector_defaults(agent: dict[str, Any]) -> None:
     connector = agent.setdefault("connector", {})
     connector.setdefault("sendReplyText", True)
+    connector.setdefault("hermesSkills", ["agenttalk:agenttalk"])
+    connector.setdefault("liveChat", True)
+    connector.setdefault("liveChatIdleTimeoutMs", DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS)
+    connector.setdefault("liveChatMaxSessionMs", DEFAULT_LIVE_CHAT_MAX_SESSION_MS)
+    connector.setdefault("startupTimeoutMs", DEFAULT_STARTUP_TIMEOUT_MS)
     if not connector.get("busyCommand"):
         normalized_busy_command = normalize_busy_command(default_busy_command())
         if normalized_busy_command:
