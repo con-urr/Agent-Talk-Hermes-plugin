@@ -415,6 +415,7 @@ def _new_agent(
     connector: dict[str, Any] = {
         "sendReplyText": True,
         "hermesSkills": ["agenttalk:agenttalk"],
+        "hermesToolsets": ["terminal"],
         "reuseHermesSession": False,
         "liveChat": True,
         "liveChatIdleTimeoutMs": DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS,
@@ -521,6 +522,7 @@ def ensure_agent_config(
             connector = agent.setdefault("connector", {})
             connector.setdefault("sendReplyText", True)
             connector.setdefault("hermesSkills", ["agenttalk:agenttalk"])
+            connector.setdefault("hermesToolsets", ["terminal"])
             connector.setdefault("reuseHermesSession", False)
             connector.setdefault("liveChat", True)
             connector.setdefault("liveChatIdleTimeoutMs", DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS)
@@ -586,6 +588,7 @@ def _ensure_connector_defaults(agent: dict[str, Any]) -> None:
     connector = agent.setdefault("connector", {})
     connector.setdefault("sendReplyText", True)
     connector.setdefault("hermesSkills", ["agenttalk:agenttalk"])
+    connector.setdefault("hermesToolsets", ["terminal"])
     connector.setdefault("reuseHermesSession", False)
     connector.setdefault("liveChat", True)
     connector.setdefault("liveChatIdleTimeoutMs", DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS)
@@ -1053,6 +1056,7 @@ def status(*, live: bool = False) -> dict[str, Any]:
         "sessionReuse": {
             "enabled": bool(connector.get("reuseHermesSession")),
         },
+        "hermesToolsets": connector.get("hermesToolsets"),
         "supervisorRunning": supervisor_running(),
         "supervisorPid": supervisor_pid(),
         "agent": {
@@ -1067,6 +1071,7 @@ def status(*, live: bool = False) -> dict[str, Any]:
             "sessionReuse": {
                 "enabled": bool(connector.get("reuseHermesSession")),
             },
+            "hermesToolsets": connector.get("hermesToolsets"),
         } if agent else None,
         "agenttalkCli": agenttalk_command(),
         "agenttalkCliManagedPath": str(managed_agenttalk_bin()),
