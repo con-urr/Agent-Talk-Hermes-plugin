@@ -634,7 +634,14 @@ def set_wake_enabled(enabled: bool) -> dict[str, Any]:
             "acceptsNewConversations": True,
         }
     save_config(config)
-    return status()
+    payload = status()
+    if agent.get("enabled"):
+        if supervisor_running():
+            payload["supervisorRestart"] = restart_supervisor()
+        elif enabled:
+            payload["supervisorStart"] = start_supervisor()
+        payload.update(status())
+    return payload
 
 
 def set_wake_access(

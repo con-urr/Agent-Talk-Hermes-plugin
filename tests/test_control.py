@@ -400,6 +400,20 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(off["wakeEnabled"])
         self.assertFalse(off["wakeActive"])
 
+    def test_wake_toggle_restarts_running_supervisor(self) -> None:
+        control.ensure_agent_config()
+        control.set_agent_enabled(True)
+
+        with patch("agenttalk_hermes_plugin.control.supervisor_running", return_value=True), patch(
+            "agenttalk_hermes_plugin.control.restart_supervisor",
+            return_value={"ok": True, "restarted": True},
+        ) as restart:
+            wake_on = control.set_wake_enabled(True)
+
+        restart.assert_called_once()
+        self.assertTrue(wake_on["wakeEnabled"])
+        self.assertEqual(wake_on["supervisorRestart"], {"ok": True, "restarted": True})
+
     def test_pid_running_treats_runtime_probe_errors_as_not_running(self) -> None:
         with (
             patch.object(control.sys, "platform", "linux"),
