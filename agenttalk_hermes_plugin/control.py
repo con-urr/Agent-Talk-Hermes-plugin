@@ -56,6 +56,8 @@ Instructions:
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
 - Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: {{replyCommand}}
 - Useful initial listen command shape: {{listenCommand}}
+- Prefer local AgentTalk MCP tools when they are available: use agenttalk_conversation_reply for replies and agenttalk_listen_conversation for follow-ups. Use the CLI command shapes as the fallback when MCP tools are unavailable.
+- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle for that bounded listen only, not proof that the full configured live-chat idle window elapsed.
 - Prioritize the first visible AgentTalk reply/listen. Avoid memory writes or unrelated tool calls during live chat unless the message truly requires them.
 - When listening, choose an appropriate timeout. The configured idle window is {{listenSeconds}}s, but you may choose based on context and policy.
 - If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
@@ -248,6 +250,10 @@ def supervisor_config_path() -> Path:
 
 def pid_path() -> Path:
     return supervisor_home() / f"{PLUGIN_ID}.pid"
+
+
+def manual_stop_path() -> Path:
+    return supervisor_home() / f"{PLUGIN_ID}.manual-stop"
 
 
 def default_state_dir() -> Path:
@@ -1585,6 +1591,39 @@ def supervisor_running() -> bool:
     return _pid_running(pid) if pid else False
 
 
+def supervisor_manually_stopped() -> bool:
+    return manual_stop_path().exists()
+
+
+def _set_supervisor_manual_stop(enabled: bool) -> None:
+    path = manual_stop_path()
+    if enabled:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _agent_wants_supervisor(agent: dict[str, Any] | None) -> bool:
+    if not agent:
+        return False
+    wake = agent.get("wake", {})
+    return bool(agent.get("enabled") and isinstance(wake, dict) and wake.get("enabled"))
+
+
+def ensure_supervisor_running_for_wake(agent: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if agent is None:
+        agent = _agent(load_config())
+    if not _agent_wants_supervisor(agent):
+        return None
+    if supervisor_running():
+        return None
+    if supervisor_manually_stopped():
+        return {"ok": True, "started": False, "reason": "manual-stop"}
+    start = start_supervisor()
+    return {"ok": bool(start.get("ok")), "started": bool(start.get("started")), "reason": "wake-autostart", **start}
+
+
 def start_supervisor() -> dict[str, Any]:
     command = agenttalk_command()
     if not command:
@@ -1592,6 +1631,7 @@ def start_supervisor() -> dict[str, Any]:
         command = agenttalk_command()
         if not command:
             return {"ok": False, "error": "agenttalk CLI not installed", "cliInstall": install}
+    _set_supervisor_manual_stop(False)
     if supervisor_running():
         return {"ok": True, "started": False, "pid": supervisor_pid()}
     home = supervisor_home()
@@ -1619,7 +1659,7 @@ def start_supervisor() -> dict[str, Any]:
 
 
 def restart_supervisor() -> dict[str, Any]:
-    stop = stop_supervisor()
+    stop = stop_supervisor(manual=False)
     start = start_supervisor()
     return {
         "ok": bool(stop.get("ok")) and bool(start.get("ok")),
@@ -1628,22 +1668,24 @@ def restart_supervisor() -> dict[str, Any]:
     }
 
 
-def stop_supervisor() -> dict[str, Any]:
+def stop_supervisor(*, manual: bool = True) -> dict[str, Any]:
+    if manual:
+        _set_supervisor_manual_stop(True)
     pid = supervisor_pid()
     if not pid:
-        return {"ok": True, "stopped": False, "reason": "no pid file"}
+        return {"ok": True, "stopped": False, "reason": "no pid file", "manual": manual}
     if not _pid_running(pid):
         pid_path().unlink(missing_ok=True)
-        return {"ok": True, "stopped": False, "reason": "process not running"}
+        return {"ok": True, "stopped": False, "reason": "process not running", "manual": manual}
     try:
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
         else:
             os.kill(pid, signal.SIGTERM)
         pid_path().unlink(missing_ok=True)
-        return {"ok": True, "stopped": True, "pid": pid}
+        return {"ok": True, "stopped": True, "pid": pid, "manual": manual}
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "pid": pid}
+        return {"ok": False, "error": str(exc), "pid": pid, "manual": manual}
 
 
 def status(*, live: bool = False) -> dict[str, Any]:
@@ -1653,6 +1695,7 @@ def status(*, live: bool = False) -> dict[str, Any]:
     connector = agent.get("connector", {}) if agent else {}
     state = load_agent_state(agent)
     pending_requests = list_wake_change_requests("pending")
+    supervisor_autostart = ensure_supervisor_running_for_wake(agent) if live else None
     live_agent = live_supervisor_agent_status() if live and agent else None
     allowed_wake_sender_agent_ids = normalize_wake_sender_agent_ids(
         wake.get("allowedWakeSenderAgentIds"), "Allowed wake senders"
@@ -1733,6 +1776,8 @@ def status(*, live: bool = False) -> dict[str, Any]:
         },
         "supervisorRunning": supervisor_running(),
         "supervisorPid": supervisor_pid(),
+        "supervisorManualStop": supervisor_manually_stopped(),
+        "supervisorAutoStart": supervisor_autostart,
         "agent": {
             "name": agent.get("name"),
             "handle": agent.get("handle"),

@@ -567,6 +567,37 @@ class ControlTests(unittest.TestCase):
         self.assertTrue(wake_on["wakeEnabled"])
         self.assertEqual(wake_on["supervisorRestart"], {"ok": True, "restarted": True})
 
+    def test_live_status_autostarts_missing_wake_supervisor(self) -> None:
+        control.ensure_agent_config(enabled=True, wake_enabled=True)
+
+        with patch("agenttalk_hermes_plugin.control.supervisor_running", return_value=False), patch(
+            "agenttalk_hermes_plugin.control.supervisor_manually_stopped",
+            return_value=False,
+        ), patch("agenttalk_hermes_plugin.control.live_supervisor_agent_status", return_value=None), patch(
+            "agenttalk_hermes_plugin.control.start_supervisor",
+            return_value={"ok": True, "started": True, "pid": 123},
+        ) as start:
+            result = control.status(live=True)
+
+        start.assert_called_once()
+        self.assertEqual(result["supervisorAutoStart"]["reason"], "wake-autostart")
+        self.assertTrue(result["supervisorAutoStart"]["started"])
+
+    def test_live_status_respects_manual_supervisor_stop(self) -> None:
+        control.ensure_agent_config(enabled=True, wake_enabled=True)
+
+        with patch("agenttalk_hermes_plugin.control.supervisor_running", return_value=False), patch(
+            "agenttalk_hermes_plugin.control.supervisor_manually_stopped",
+            return_value=True,
+        ), patch("agenttalk_hermes_plugin.control.live_supervisor_agent_status", return_value=None), patch(
+            "agenttalk_hermes_plugin.control.start_supervisor"
+        ) as start:
+            result = control.status(live=True)
+
+        start.assert_not_called()
+        self.assertEqual(result["supervisorAutoStart"]["reason"], "manual-stop")
+        self.assertTrue(result["supervisorManualStop"])
+
     def test_pid_running_treats_runtime_probe_errors_as_not_running(self) -> None:
         with (
             patch.object(control.sys, "platform", "linux"),

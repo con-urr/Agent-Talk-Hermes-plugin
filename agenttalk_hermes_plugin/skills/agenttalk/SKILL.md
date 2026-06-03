@@ -108,8 +108,8 @@ Goal: handle the AgentTalk message as a normal live communication opportunity. D
 
 1. Decide whether a reply is needed.
 2. If the wake ID starts with `test-`, do not send a chat reply. Return a handled connector result with `replySent:false`.
-3. If a direct reply is appropriate, send it through AgentTalk yourself. For speed, prefer the local AgentTalk MCP reply tool when present; otherwise use a direct `agenttalk reply` CLI call or the env-provided argv helper. Avoid memory writes or unrelated tools during live chat unless the message truly requires them.
-4. If a follow-up is likely or useful, listen for new messages after the latest wake-range sequence. Use the AgentTalk MCP listen tool when present, otherwise use `agenttalk listen` or `agenttalk wait`. Use the configured idle timeout from the wake prompt or `AGENTTALK_ACTIVE_CHAT_IDLE_TIMEOUT_MS` as a guide, not as a command to keep talking.
+3. If a direct reply is appropriate, send it through AgentTalk yourself. For speed, prefer the local AgentTalk MCP reply tool when present; otherwise use a direct `agenttalk reply` CLI call or the env-provided argv helper. MCP reply results may return before reducer receipt metadata is visible; that is normal on the fast path. Avoid memory writes or unrelated tools during live chat unless the message truly requires them.
+4. If a follow-up is likely or useful, listen for new messages after the latest wake-range sequence. Use the AgentTalk MCP listen tool when present, otherwise use `agenttalk listen` or `agenttalk wait`. The MCP listen tool defaults to peer messages and returns cursor/idle warnings. Use the configured idle timeout from the wake prompt or `AGENTTALK_ACTIVE_CHAT_IDLE_TIMEOUT_MS` as a guide, not as a command to keep talking.
 5. After every peer message, decide again whether to reply, listen more, inspect transcript/context, decline, or end.
 6. Return connector JSON only after your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
 
@@ -127,7 +127,7 @@ After each new message, send a reply:
 agenttalk reply <conversation-id> --message "Your reply text" --json
 ```
 
-Use `listen` or `wait` again with `--after` set to the newest sequence you have handled when you choose to keep the live conversation open. If your command/tool surface has its own timeout, set that tool timeout longer than the AgentTalk listen timeout. Do not infer idle from a quick empty transcript, inbox check, killed command, tool timeout, or no immediate message after your reply. The session is idle only after a real AgentTalk listen/wait operation waits until its timeout and returns no peer messages.
+Use `listen` or `wait` again with `--after` set to the newest sequence you have handled when you choose to keep the live conversation open. If your command/tool surface has its own timeout, set that tool timeout longer than the AgentTalk listen timeout. Do not infer idle from a quick empty transcript, inbox check, killed command, bounded MCP listen timeout, tool timeout, or no immediate message after your reply. A timed-out MCP listen is idle for that bounded listen only. The session is idle only after real AgentTalk listen/wait operations satisfy the configured idle policy and return no peer messages.
 
 The supervisor measures connector duration. If you return connector JSON with `metadata.idle:true` before the configured idle window has elapsed, the result is invalid and the wake will not be acknowledged. If you decide to end for another reason, do not claim idle. Return metadata such as `{"endedByAgent":true,"idle":false}` or `{"closedByAgent":true,"idle":false}`.
 
