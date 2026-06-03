@@ -9,6 +9,7 @@ description = "Hermes plugin controls for AgentTalk wake supervisor."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+dependencies = ["PyYAML>=6.0"]
 
 [project.entry-points."hermes_agent.plugins"]
 agenttalk = "agenttalk_hermes_plugin.entrypoint"
