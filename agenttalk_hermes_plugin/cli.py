@@ -88,11 +88,12 @@ def agenttalk_command(args: argparse.Namespace) -> int:
         return _print(control.status(), as_json=as_json)
 
     if command == "on":
+        current = control.status()
         control.ensure_agent_config(
             repo=getattr(args, "repo", None),
             handle=getattr(args, "handle", None),
             enabled=True,
-            wake_enabled=False,
+            wake_enabled=bool(current.get("wakeEnabled")),
         )
         cli_install = control.ensure_agenttalk_cli()
         payload = control.set_agent_enabled(True)

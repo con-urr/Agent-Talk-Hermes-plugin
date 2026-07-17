@@ -32,6 +32,7 @@ class ControlTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.old_home = os.environ.get("AGENTTALK_SUPERVISOR_HOME")
+        self.old_config_path = os.environ.get("AGENTTALK_SUPERVISOR_CONFIG")
         self.old_state_home = os.environ.get("AGENTTALK_AGENT_STATE_HOME")
         self.old_handle = os.environ.get("AGENTTALK_HERMES_AGENT_HANDLE")
         self.old_busy = os.environ.get("AGENTTALK_HERMES_BUSY_COMMAND")
@@ -41,6 +42,7 @@ class ControlTests(unittest.TestCase):
         self.old_cli_spec = os.environ.get("AGENTTALK_CLI_NPM_SPEC")
         self.old_npm_command = os.environ.get("AGENTTALK_NPM_COMMAND")
         os.environ["AGENTTALK_SUPERVISOR_HOME"] = self.tmp.name
+        os.environ["AGENTTALK_SUPERVISOR_CONFIG"] = os.path.join(self.tmp.name, "config.json")
         os.environ["AGENTTALK_AGENT_STATE_HOME"] = os.path.join(self.tmp.name, "agents")
         os.environ["AGENTTALK_CLI_HOME"] = os.path.join(self.tmp.name, "cli")
         os.environ.pop("AGENTTALK_HERMES_AGENT_HANDLE", None)
@@ -55,6 +57,10 @@ class ControlTests(unittest.TestCase):
             os.environ.pop("AGENTTALK_SUPERVISOR_HOME", None)
         else:
             os.environ["AGENTTALK_SUPERVISOR_HOME"] = self.old_home
+        if self.old_config_path is None:
+            os.environ.pop("AGENTTALK_SUPERVISOR_CONFIG", None)
+        else:
+            os.environ["AGENTTALK_SUPERVISOR_CONFIG"] = self.old_config_path
         if self.old_state_home is None:
             os.environ.pop("AGENTTALK_AGENT_STATE_HOME", None)
         else:
@@ -176,6 +182,39 @@ class ControlTests(unittest.TestCase):
         forced = control.ensure_agent_config(force=True)
         self.assertEqual(forced["agentTalkHandle"], "env-hermes-handle")
 
+    def test_legacy_copied_wake_prompt_realtime_hints_are_upgraded(self) -> None:
+        legacy = (
+            control.STANDARD_WAKE_PROMPT_TEMPLATE.replace(
+                control.CURRENT_RECEIPT_LISTEN_HINT,
+                control.LEGACY_RECEIPT_LISTEN_HINT,
+            )
+            .replace(
+                control.CURRENT_LISTEN_TIMEOUT_HINT,
+                control.LEGACY_LISTEN_TIMEOUT_HINT,
+            )
+            .replace(
+                control.CURRENT_ACTIVE_POLICY_HINT,
+                control.LEGACY_ACTIVE_POLICY_HINT,
+            )
+        )
+
+        control.ensure_agent_config()
+        result = control.set_wake_behavior(wake_prompt_template=legacy)
+
+        self.assertIn("receiptWaitMs above 750ms", result["wakePrompt"]["template"])
+        self.assertIn("short 8-12s listen window", result["wakePrompt"]["template"])
+        self.assertIn("initialListenTimeoutMs", result["wakePrompt"]["template"])
+        self.assertNotIn("When listening, choose an appropriate timeout", result["wakePrompt"]["template"])
+        self.assertNotIn(
+            "liveChat={{liveChat}}, idleTimeoutMs",
+            result["wakePrompt"]["template"],
+        )
+
+        truncated = legacy[: legacy.index(control.LEGACY_ACTIVE_POLICY_HINT)]
+        migrated = control.set_wake_behavior(wake_prompt_template=truncated)
+        self.assertIn("Return or print a structured connector result JSON", migrated["wakePrompt"]["template"])
+        self.assertIn("initialListenTimeoutMs", migrated["wakePrompt"]["template"])
+
     def test_runtime_busy_check_is_configurable(self) -> None:
         result = control.ensure_agent_config(
             busy_command="python busy_check.py",
@@ -257,8 +296,8 @@ class ControlTests(unittest.TestCase):
             result = control.ensure_agenttalk_cli()
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["npmSpec"], "github:con-urr/pistils_chat_cli#main")
-        self.assertEqual(run.call_args.args[0][-1], "github:con-urr/pistils_chat_cli#main")
+        self.assertEqual(result["npmSpec"], "github:con-urr/pistils_chat_cli#v0.1.2")
+        self.assertEqual(run.call_args.args[0][-1], "github:con-urr/pistils_chat_cli#v0.1.2")
 
     def test_status_projects_agenttalk_state(self) -> None:
         control.ensure_agent_config()
@@ -444,10 +483,24 @@ class ControlTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(captured["args"], ["agenttalk", "conversation", "list", "--json"])
         self.assertEqual(captured["env"]["AGENTTALK_STATE_DIR"], str(custom_state.resolve()))
+        self.assertEqual(captured["env"]["AGENTTALK_SUPERVISOR_HOME"], self.tmp.name)
+        self.assertEqual(
+            captured["env"]["AGENTTALK_SUPERVISOR_CONFIG"],
+            str(Path(self.tmp.name) / "config.json"),
+        )
+        self.assertEqual(captured["env"]["AGENTTALK_CONTROL_PROFILE"], "plugin_managed")
+        self.assertEqual(captured["env"]["AGENTTALK_CREDENTIAL_SCOPE"], "plugin_runtime")
         self.assertEqual(captured["env"]["SPACETIMEDB_HOST"], "https://agenttalk.example.test")
         self.assertEqual(captured["env"]["SPACETIMEDB_DB_NAME"], "agenttalk-test-db")
         mcp = control.agenttalk_mcp_server_config()
         self.assertEqual(mcp["env"]["AGENTTALK_STATE_DIR"], str(custom_state.resolve()))
+        self.assertEqual(mcp["env"]["AGENTTALK_SUPERVISOR_HOME"], self.tmp.name)
+        self.assertEqual(
+            mcp["env"]["AGENTTALK_SUPERVISOR_CONFIG"],
+            str(Path(self.tmp.name) / "config.json"),
+        )
+        self.assertEqual(mcp["env"]["AGENTTALK_CONTROL_PROFILE"], "plugin_managed")
+        self.assertEqual(mcp["env"]["AGENTTALK_CREDENTIAL_SCOPE"], "plugin_runtime")
         self.assertEqual(mcp["env"]["SPACETIMEDB_HOST"], "https://agenttalk.example.test")
         self.assertEqual(mcp["env"]["SPACETIMEDB_DB_NAME"], "agenttalk-test-db")
 
@@ -538,7 +591,9 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(on["wakeEnabled"])
         self.assertFalse(on["wakeActive"])
 
-        wake_on = control.set_wake_enabled(True)
+        with patch("agenttalk_hermes_plugin.control.start_supervisor", return_value={"ok": True, "started": True}) as start:
+            wake_on = control.set_wake_enabled(True)
+        start.assert_called_once()
         self.assertTrue(wake_on["agentEnabled"])
         self.assertTrue(wake_on["wakeEnabled"])
         self.assertTrue(wake_on["wakeActive"])

@@ -69,10 +69,11 @@ async def setup(body: dict[str, Any] | None = None) -> dict[str, Any]:
 async def set_agent(body: dict[str, Any] | None = None) -> dict[str, Any]:
     enabled = bool(_body_value(body, "enabled", False))
     if enabled:
+        current = control.status()
         control.ensure_agent_config(
             handle=_body_value(body, "handle"),
             enabled=True,
-            wake_enabled=False,
+            wake_enabled=bool(current.get("wakeEnabled")),
         )
         cli_install = control.ensure_agenttalk_cli()
         payload = control.set_agent_enabled(True)

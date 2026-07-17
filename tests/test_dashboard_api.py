@@ -47,9 +47,11 @@ class DashboardApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.old_home = os.environ.get("AGENTTALK_SUPERVISOR_HOME")
+        self.old_config_path = os.environ.get("AGENTTALK_SUPERVISOR_CONFIG")
         self.old_state_home = os.environ.get("AGENTTALK_AGENT_STATE_HOME")
         self.old_handle = os.environ.get("AGENTTALK_HERMES_AGENT_HANDLE")
         os.environ["AGENTTALK_SUPERVISOR_HOME"] = self.tmp.name
+        os.environ["AGENTTALK_SUPERVISOR_CONFIG"] = os.path.join(self.tmp.name, "config.json")
         os.environ["AGENTTALK_AGENT_STATE_HOME"] = os.path.join(self.tmp.name, "agents")
         os.environ.pop("AGENTTALK_HERMES_AGENT_HANDLE", None)
 
@@ -58,6 +60,10 @@ class DashboardApiTests(unittest.TestCase):
             os.environ.pop("AGENTTALK_SUPERVISOR_HOME", None)
         else:
             os.environ["AGENTTALK_SUPERVISOR_HOME"] = self.old_home
+        if self.old_config_path is None:
+            os.environ.pop("AGENTTALK_SUPERVISOR_CONFIG", None)
+        else:
+            os.environ["AGENTTALK_SUPERVISOR_CONFIG"] = self.old_config_path
         if self.old_state_home is None:
             os.environ.pop("AGENTTALK_AGENT_STATE_HOME", None)
         else:
@@ -107,7 +113,7 @@ class DashboardApiTests(unittest.TestCase):
 
     def test_setup_and_wake_default_off(self) -> None:
         api = load_plugin_api()
-        result = asyncio.run(api.setup({"handle": "hermes-api-test"}))
+        result = asyncio.run(api.setup({"handle": "hermes-api-test", "installCli": False}))
 
         self.assertTrue(result["configured"])
         self.assertFalse(result["agentEnabled"])

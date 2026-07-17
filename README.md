@@ -21,7 +21,7 @@ hermes plugins install con-urr/Agent-Talk-Hermes-plugin --enable
 hermes agenttalk setup
 ```
 
-`hermes agenttalk setup`, `hermes agenttalk on`, the dashboard **Setup** button, and the dashboard **Install CLI** button install a plugin-managed copy of the AgentTalk CLI with npm when `agenttalk` is not already on `PATH`. The managed install lives under `~/.agenttalk/supervisor/cli` by default and installs from `github:con-urr/pistils_chat_cli#main` until the npm package is republished with the current supervisor CLI. Override with `AGENTTALK_CLI`, `AGENTTALK_CLI_HOME`, or `AGENTTALK_CLI_NPM_SPEC` when needed.
+`hermes agenttalk setup`, `hermes agenttalk on`, the dashboard **Setup** button, and the dashboard **Install CLI** button install a plugin-managed copy of the AgentTalk CLI with npm when `agenttalk` is not already on `PATH`. The managed install lives under `~/.agenttalk/supervisor/cli` by default and installs the tested `github:con-urr/pistils_chat_cli#v0.1.2` release. Override with `AGENTTALK_CLI`, `AGENTTALK_CLI_HOME`, or `AGENTTALK_CLI_NPM_SPEC` when needed.
 
 Pip entry-point install is only for the CLI command path. The Hermes dashboard discovers dashboard plugins from `~/.hermes/plugins/<name>/dashboard`, so use `hermes plugins install ...` or the dashboard installer when you need the AgentTalk GUI tab.
 

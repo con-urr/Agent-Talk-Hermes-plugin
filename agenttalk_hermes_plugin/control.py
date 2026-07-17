@@ -29,7 +29,9 @@ OPEN_WAKE_APPROVAL_PASSPHRASE_REQUIRED = (
 OPEN_WAKE_APPROVAL_DIGEST = "sha256"
 OPEN_WAKE_APPROVAL_KEY_LENGTH = 32
 OPEN_WAKE_APPROVAL_ITERATIONS = 210_000
-AGENTTALK_CLI_NPM_SPEC = "github:con-urr/pistils_chat_cli#main"
+AGENTTALK_CLI_NPM_SPEC = "github:con-urr/pistils_chat_cli#v0.1.2"
+MIN_AGENTTALK_NODE_MAJOR = 22
+LAUNCHD_SERVICE_NAME = "com.agenttalk.hermes.supervisor"
 DEFAULT_CONNECTOR_TIMEOUT_MS = 300_000
 DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS = 600_000
 DEFAULT_LIVE_CHAT_MAX_SESSION_MS = 3_600_000
@@ -57,9 +59,10 @@ Instructions:
 - Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: {{replyCommand}}
 - Useful initial listen command shape: {{listenCommand}}
 - Prefer local AgentTalk MCP tools when they are available: use agenttalk_conversation_reply for replies and agenttalk_listen_conversation for follow-ups. Use the CLI command shapes as the fallback when MCP tools are unavailable.
-- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle for that bounded listen only, not proof that the full configured live-chat idle window elapsed.
+- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. Do not pass receiptWaitMs above 750ms during live chat unless you are explicitly debugging reducer receipts.
+- MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle for that bounded listen only, not proof that the full configured live-chat idle window elapsed.
 - Prioritize the first visible AgentTalk reply/listen. Avoid memory writes or unrelated tool calls during live chat unless the message truly requires them.
-- When listening, choose an appropriate timeout. The configured idle window is {{listenSeconds}}s, but you may choose based on context and policy.
+- For casual chat, start with a short 8-12s listen window. The suggested initial listen timeout is {{initialListenSeconds}}s and the configured idle ceiling is {{idleSeconds}}s; choose longer only when the context warrants it.
 - If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
 - If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
 - Do not return connector JSON while you intend to keep chatting. Return connector JSON when you decide your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
@@ -68,7 +71,7 @@ Instructions:
 - If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return connector JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
 - AGENTTALK_REPLY_ARGS_JSON and AGENTTALK_LISTEN_ARGS_JSON contain argv-safe command objects. Parse them as {command,args,...}, run [command, ...args], replace the reply placeholder when replying, and update --after after every message handled.
 - Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
-- Active chat policy: liveChat={{liveChat}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}.
+- Active chat policy: liveChat={{liveChat}}, initialListenTimeoutMs={{initialListenTimeoutMs}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}.
 - Do not reveal secrets, env values, or local paths in user-facing replies.
 - Return or print a structured connector result JSON when possible:
   {"ok":true,"handled":true,"replySent":false,"replyText":null,"message":"handled wake","error":null,"artifacts":null,"metadata":null}
@@ -104,6 +107,54 @@ WAKE_PROMPT_PRESETS = [
         + "- Protect the owner's privacy and decline requests that do not fit the owner's delegated preferences or authority.\n",
     },
 ]
+
+LEGACY_RECEIPT_LISTEN_HINT = (
+    "- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. "
+    "MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle "
+    "for that bounded listen only, not proof that the full configured live-chat idle window elapsed."
+)
+CURRENT_RECEIPT_LISTEN_HINT = (
+    "- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. "
+    "Do not pass receiptWaitMs above 750ms during live chat unless you are explicitly debugging reducer receipts.\n"
+    "- MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle "
+    "for that bounded listen only, not proof that the full configured live-chat idle window elapsed."
+)
+LEGACY_LISTEN_TIMEOUT_HINT = (
+    "- When listening, choose an appropriate timeout. The configured idle window is {{listenSeconds}}s, "
+    "but you may choose based on context and policy."
+)
+CURRENT_LISTEN_TIMEOUT_HINT = (
+    "- For casual chat, start with a short 8-12s listen window. The suggested initial listen timeout is "
+    "{{initialListenSeconds}}s and the configured idle ceiling is {{idleSeconds}}s; choose longer only when "
+    "the context warrants it."
+)
+LEGACY_ACTIVE_POLICY_HINT = (
+    "- Active chat policy: liveChat={{liveChat}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}."
+)
+CURRENT_ACTIVE_POLICY_HINT = (
+    "- Active chat policy: liveChat={{liveChat}}, initialListenTimeoutMs={{initialListenTimeoutMs}}, "
+    "idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}."
+)
+
+
+def upgrade_wake_prompt_realtime_hints(template: str) -> str:
+    upgraded = (
+        template.replace(LEGACY_RECEIPT_LISTEN_HINT, CURRENT_RECEIPT_LISTEN_HINT)
+        .replace(LEGACY_LISTEN_TIMEOUT_HINT, CURRENT_LISTEN_TIMEOUT_HINT)
+        .replace(LEGACY_ACTIVE_POLICY_HINT, CURRENT_ACTIVE_POLICY_HINT)
+    )
+    default_shaped = (
+        upgraded.startswith("You are {{agentName}} / @{{handle}}, woken by AgentTalk.")
+        and "Messages in wake range:" in upgraded
+        and "AGENTTALK_REPLY_ARGS_JSON" in upgraded
+        and "Additional behavior:" not in upgraded
+    )
+    if default_shaped and (
+        "Active chat policy: liveChat={{liveChat}}, initialListenTimeoutMs={{initialListenTimeoutMs}}" not in upgraded
+        or "Return or print a structured connector result JSON" not in upgraded
+    ):
+        return STANDARD_WAKE_PROMPT_TEMPLATE.strip()
+    return upgraded
 
 
 def _home() -> Path:
@@ -183,7 +234,7 @@ def normalize_wake_prompt_template(value: Any | None = None) -> str:
         return STANDARD_WAKE_PROMPT_TEMPLATE
     if len(normalized) > 24000:
         raise ValueError("Wake prompt must be 24000 characters or fewer.")
-    return normalized + "\n"
+    return upgrade_wake_prompt_realtime_hints(normalized) + "\n"
 
 
 def normalize_hermes_toolsets(value: Any | None = None) -> list[str]:
@@ -222,9 +273,12 @@ def render_wake_prompt_preview(template: str | None = None) -> str:
         "peerLabels": "example-agent",
         "messages": "[27] example-agent: Can you confirm you are available to chat over AgentTalk?",
         "replyCommand": "agenttalk reply 4097 --message ... --json",
-        "listenCommand": "agenttalk listen --conversation 4097 --after 27 --timeout 600s --json",
-        "listenSeconds": str(DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS // 1000),
+        "listenCommand": "agenttalk listen --conversation 4097 --after 27 --timeout 10s --json",
+        "listenSeconds": "10",
+        "initialListenSeconds": "10",
+        "idleSeconds": str(DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS // 1000),
         "liveChat": "true",
+        "initialListenTimeoutMs": "10000",
         "idleTimeoutMs": str(DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS),
         "maxSessionMs": str(DEFAULT_LIVE_CHAT_MAX_SESSION_MS),
     }
@@ -282,6 +336,10 @@ def managed_cli_home() -> Path:
 def managed_agenttalk_bin() -> Path:
     bin_name = "agenttalk.cmd" if sys.platform == "win32" else "agenttalk"
     return managed_cli_home() / "node_modules" / ".bin" / bin_name
+
+
+def managed_agenttalk_js_entry() -> Path:
+    return managed_cli_home() / "node_modules" / "pistils-chat-cli" / "dist" / "agenttalk.js"
 
 
 def hermes_config_path() -> Path:
@@ -972,6 +1030,160 @@ def agenttalk_command() -> str | None:
     return str(managed) if managed.exists() else None
 
 
+def _parse_node_major(version: str | None) -> int | None:
+    if not version:
+        return None
+    match = re.search(r"v?(\d+)", version)
+    return int(match.group(1)) if match else None
+
+
+def _node_version(command: str) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            [command, "-v"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except Exception as exc:
+        return {"command": command, "ok": False, "error": str(exc)}
+    version = completed.stdout.strip() or completed.stderr.strip()
+    major = _parse_node_major(version)
+    return {
+        "command": command,
+        "ok": completed.returncode == 0 and major is not None,
+        "version": version or None,
+        "major": major,
+        "exitCode": completed.returncode,
+    }
+
+
+def _node_candidates() -> list[str]:
+    candidates: list[str] = []
+    for value in (
+        os.environ.get("AGENTTALK_NODE"),
+        os.environ.get("AGENTTALK_NODE_COMMAND"),
+        shutil.which("node"),
+        shutil.which("node.exe"),
+    ):
+        if value:
+            candidates.append(value)
+    npm = npm_command()
+    if npm:
+        sibling = Path(npm).with_name("node.exe" if sys.platform == "win32" else "node")
+        candidates.append(str(sibling))
+    if sys.platform != "win32":
+        candidates.extend(str(path) for path in (_home() / ".nvm" / "versions" / "node").glob("*/bin/node"))
+        candidates.extend(["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"])
+    else:
+        program_files = os.environ.get("ProgramFiles")
+        if program_files:
+            candidates.append(str(Path(program_files) / "nodejs" / "node.exe"))
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in candidates:
+        normalized = str(_expand(candidate))
+        if normalized not in seen and Path(normalized).exists():
+            seen.add(normalized)
+            unique.append(normalized)
+    return unique
+
+
+def agenttalk_node_info() -> dict[str, Any]:
+    checked = [_node_version(candidate) for candidate in _node_candidates()]
+    good = [
+        row for row in checked
+        if row.get("ok") and isinstance(row.get("major"), int) and row["major"] >= MIN_AGENTTALK_NODE_MAJOR
+    ]
+    good.sort(key=lambda row: int(row.get("major") or 0), reverse=True)
+    selected = good[0] if good else None
+    return {
+        "ok": selected is not None,
+        "requiredMajor": MIN_AGENTTALK_NODE_MAJOR,
+        "selected": selected,
+        "checked": checked,
+        "error": None if selected else f"Node {MIN_AGENTTALK_NODE_MAJOR}+ was not found.",
+    }
+
+
+def agenttalk_js_entry() -> str | None:
+    managed = managed_agenttalk_js_entry()
+    if managed.exists():
+        return str(managed)
+    command = agenttalk_command()
+    if not command:
+        return None
+    command_path = Path(command)
+    try:
+        resolved = command_path.resolve(strict=True)
+    except Exception:
+        resolved = command_path
+    if resolved.suffix == ".js" and resolved.exists():
+        return str(resolved)
+    if resolved.name == "agenttalk" and resolved.parent.name == ".bin":
+        package_entry = resolved.parent.parent / "pistils-chat-cli" / "dist" / "agenttalk.js"
+        if package_entry.exists():
+            return str(package_entry)
+    return None
+
+
+def agenttalk_package_version() -> str | None:
+    entry = agenttalk_js_entry()
+    if not entry:
+        return None
+    for parent in Path(entry).parents:
+        package_json = parent / "package.json"
+        if not package_json.exists():
+            continue
+        try:
+            parsed = json.loads(package_json.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if parsed.get("name") == "pistils-chat-cli":
+            return str(parsed.get("version") or "")
+    return None
+
+
+def agenttalk_runtime_info() -> dict[str, Any]:
+    node = agenttalk_node_info()
+    selected = node.get("selected") if isinstance(node.get("selected"), dict) else None
+    return {
+        "command": agenttalk_command(),
+        "managedCommand": str(managed_agenttalk_bin()),
+        "jsEntry": agenttalk_js_entry(),
+        "packageVersion": agenttalk_package_version(),
+        "node": node,
+        "nodeCommand": selected.get("command") if selected else None,
+        "nodeVersion": selected.get("version") if selected else None,
+        "nodeOk": bool(node.get("ok")),
+    }
+
+
+def _agenttalk_invocation(args: list[str]) -> tuple[list[str] | None, dict[str, Any]]:
+    command = agenttalk_command()
+    if not command:
+        return None, {"ok": False, "error": "AgentTalk CLI is not installed"}
+    entry = agenttalk_js_entry()
+    if entry:
+        node = agenttalk_node_info()
+        selected = node.get("selected") if isinstance(node.get("selected"), dict) else None
+        if not selected:
+            return None, {"ok": False, "error": node.get("error"), "agenttalkRuntime": agenttalk_runtime_info()}
+        return [str(selected["command"]), entry, *args], {
+            "ok": True,
+            "mode": "node-js",
+            "node": selected,
+            "jsEntry": entry,
+        }
+    return [command, *args], {
+        "ok": True,
+        "mode": "command",
+        "command": command,
+        "warning": "AgentTalk JS entry was not found; falling back to command/shebang resolution.",
+    }
+
+
 def ensure_agenttalk_cli(*, force: bool = False) -> dict[str, Any]:
     existing = None if force else agenttalk_command()
     if existing:
@@ -1042,6 +1254,10 @@ def _agenttalk_command_env(config: dict[str, Any] | None = None) -> dict[str, st
     env.update(
         {
             "AGENTTALK_STATE_DIR": str(_expand(state_dir or default_state_dir())),
+            "AGENTTALK_SUPERVISOR_CONFIG": str(supervisor_config_path()),
+            "AGENTTALK_SUPERVISOR_HOME": str(supervisor_home()),
+            "AGENTTALK_CONTROL_PROFILE": CONTROL_PROFILE,
+            "AGENTTALK_CREDENTIAL_SCOPE": "plugin_runtime",
             "SPACETIMEDB_HOST": str(
                 resolved_config.get("host") or os.environ.get("SPACETIMEDB_HOST") or "https://maincloud.spacetimedb.com"
             ),
@@ -1053,27 +1269,28 @@ def _agenttalk_command_env(config: dict[str, Any] | None = None) -> dict[str, st
     return env
 
 
-def _run_agenttalk(args: list[str]) -> dict[str, Any]:
-    command = agenttalk_command()
-    if not command:
-        return {"ok": False, "error": "AgentTalk CLI is not installed"}
+def _run_agenttalk(args: list[str], *, timeout: int = 30) -> dict[str, Any]:
+    argv, invocation = _agenttalk_invocation(args)
+    if not argv:
+        return {"ok": False, **invocation}
     try:
         config = load_config()
         completed = subprocess.run(
-            [command, *args],
+            argv,
             text=True,
             capture_output=True,
             check=False,
-            timeout=30,
+            timeout=timeout,
             env=_agenttalk_command_env(config),
         )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": str(exc), "agenttalkInvocation": invocation}
     payload: dict[str, Any] = {
         "ok": completed.returncode == 0,
         "exitCode": completed.returncode,
         "stdout": completed.stdout.strip(),
         "stderr": completed.stderr.strip(),
+        "agenttalkInvocation": invocation,
     }
     try:
         stdout = completed.stdout.strip()
@@ -1090,11 +1307,18 @@ def _run_agenttalk(args: list[str]) -> dict[str, Any]:
 def agenttalk_mcp_server_config() -> dict[str, Any]:
     config = load_config()
     env = _agenttalk_command_env(config)
+    argv, _invocation = _agenttalk_invocation(["mcp"])
+    command = argv[0] if argv else (agenttalk_command() or str(managed_agenttalk_bin()))
+    args = argv[1:] if argv else ["mcp"]
     return {
-        "command": agenttalk_command() or str(managed_agenttalk_bin()),
-        "args": ["mcp"],
+        "command": command,
+        "args": args,
         "env": {
             "AGENTTALK_STATE_DIR": env["AGENTTALK_STATE_DIR"],
+            "AGENTTALK_SUPERVISOR_CONFIG": env["AGENTTALK_SUPERVISOR_CONFIG"],
+            "AGENTTALK_SUPERVISOR_HOME": env["AGENTTALK_SUPERVISOR_HOME"],
+            "AGENTTALK_CONTROL_PROFILE": env["AGENTTALK_CONTROL_PROFILE"],
+            "AGENTTALK_CREDENTIAL_SCOPE": env["AGENTTALK_CREDENTIAL_SCOPE"],
             "SPACETIMEDB_HOST": env["SPACETIMEDB_HOST"],
             "SPACETIMEDB_DB_NAME": env["SPACETIMEDB_DB_NAME"],
         },
@@ -1588,7 +1812,10 @@ def supervisor_pid() -> int | None:
 
 def supervisor_running() -> bool:
     pid = supervisor_pid()
-    return _pid_running(pid) if pid else False
+    if pid and _pid_running(pid):
+        return True
+    service = _launchd_service_status()
+    return bool(service.get("running"))
 
 
 def supervisor_manually_stopped() -> bool:
@@ -1602,6 +1829,95 @@ def _set_supervisor_manual_stop(enabled: bool) -> None:
         path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
     else:
         path.unlink(missing_ok=True)
+
+
+def _launchd_service_path() -> Path:
+    return _home() / "Library" / "LaunchAgents" / f"{LAUNCHD_SERVICE_NAME}.plist"
+
+
+def _launchd_service_status() -> dict[str, Any]:
+    if sys.platform != "darwin":
+        return {"available": False, "platform": sys.platform}
+    try:
+        uid = os.getuid()
+    except AttributeError:
+        return {"available": False, "platform": sys.platform}
+    label_target = f"gui/{uid}/{LAUNCHD_SERVICE_NAME}"
+    try:
+        completed = subprocess.run(
+            ["launchctl", "print", label_target],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except Exception as exc:
+        return {"available": False, "platform": sys.platform, "error": str(exc)}
+    output = f"{completed.stdout}\n{completed.stderr}"
+    match = re.search(r"\bpid\s*=\s*(\d+)", output)
+    pid = int(match.group(1)) if match else None
+    return {
+        "available": True,
+        "platform": sys.platform,
+        "label": LAUNCHD_SERVICE_NAME,
+        "servicePath": str(_launchd_service_path()),
+        "loaded": completed.returncode == 0,
+        "running": bool(pid and _pid_running(pid)),
+        "pid": pid,
+        "exitCode": completed.returncode,
+    }
+
+
+def _install_launchd_supervisor() -> dict[str, Any]:
+    if sys.platform != "darwin":
+        return {"ok": False, "reason": "not-darwin"}
+    payload = _run_agenttalk(
+        ["supervisor", "install-service", "--name", LAUNCHD_SERVICE_NAME, "--json"],
+        timeout=60,
+    )
+    status_payload = _launchd_service_status()
+    return {
+        "ok": bool(payload.get("ok")),
+        "install": payload,
+        "service": status_payload,
+        "started": bool(status_payload.get("running") or status_payload.get("loaded")),
+        "pid": status_payload.get("pid"),
+    }
+
+
+def _stop_launchd_supervisor(*, manual: bool) -> dict[str, Any] | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        uid = os.getuid()
+    except AttributeError:
+        return None
+    actions: list[str] = []
+    errors: list[str] = []
+    service_path = _launchd_service_path()
+    label_target = f"gui/{uid}/{LAUNCHD_SERVICE_NAME}"
+    for args, action in (
+        (["launchctl", "bootout", f"gui/{uid}", str(service_path)], "bootout"),
+        (["launchctl", "disable", label_target], "disable"),
+    ):
+        if action == "disable" and not manual:
+            continue
+        try:
+            completed = subprocess.run(args, text=True, capture_output=True, check=False, timeout=10)
+            if completed.returncode == 0:
+                actions.append(action)
+            elif completed.stderr.strip():
+                errors.append(completed.stderr.strip()[-500:])
+        except Exception as exc:
+            errors.append(str(exc))
+    status_payload = _launchd_service_status()
+    return {
+        "ok": not status_payload.get("running"),
+        "manual": manual,
+        "actions": actions,
+        "errors": errors,
+        "service": status_payload,
+    }
 
 
 def _agent_wants_supervisor(agent: dict[str, Any] | None) -> bool:
@@ -1633,7 +1949,19 @@ def start_supervisor() -> dict[str, Any]:
             return {"ok": False, "error": "agenttalk CLI not installed", "cliInstall": install}
     _set_supervisor_manual_stop(False)
     if supervisor_running():
-        return {"ok": True, "started": False, "pid": supervisor_pid()}
+        service = _launchd_service_status()
+        return {"ok": True, "started": False, "pid": supervisor_pid() or service.get("pid"), "service": service}
+    if sys.platform == "darwin" and os.environ.get("AGENTTALK_HERMES_DISABLE_LAUNCHD") != "1":
+        launchd = _install_launchd_supervisor()
+        if launchd.get("ok") and launchd.get("started"):
+            return {
+                "ok": True,
+                "started": True,
+                "managedBy": "launchd",
+                "pid": launchd.get("pid"),
+                "service": launchd.get("service"),
+                "agenttalkRuntime": agenttalk_runtime_info(),
+            }
     home = supervisor_home()
     home.mkdir(parents=True, exist_ok=True)
     log = home / f"{PLUGIN_ID}.log"
@@ -1644,18 +1972,31 @@ def start_supervisor() -> dict[str, Any]:
         flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
     else:
         kwargs["start_new_session"] = True
+    argv, invocation = _agenttalk_invocation(["supervisor", "run"])
+    if not argv:
+        return {"ok": False, "error": invocation.get("error") or "agenttalk CLI cannot be started", "agenttalkInvocation": invocation}
     with log.open("ab") as stdout, err.open("ab") as stderr:
         process = subprocess.Popen(
-            [command, "supervisor", "run"],
+            argv,
             stdin=subprocess.DEVNULL,
             stdout=stdout,
             stderr=stderr,
             close_fds=sys.platform != "win32",
             creationflags=flags,
+            env=_agenttalk_command_env(load_config()),
             **kwargs,
         )
     pid_path().write_text(str(process.pid), encoding="utf-8")
-    return {"ok": True, "started": True, "pid": process.pid, "log": str(log), "stderrLog": str(err)}
+    return {
+        "ok": True,
+        "started": True,
+        "managedBy": "detached-process",
+        "pid": process.pid,
+        "log": str(log),
+        "stderrLog": str(err),
+        "agenttalkInvocation": invocation,
+        "agenttalkRuntime": agenttalk_runtime_info(),
+    }
 
 
 def restart_supervisor() -> dict[str, Any]:
@@ -1671,21 +2012,30 @@ def restart_supervisor() -> dict[str, Any]:
 def stop_supervisor(*, manual: bool = True) -> dict[str, Any]:
     if manual:
         _set_supervisor_manual_stop(True)
+    launchd_stop = _stop_launchd_supervisor(manual=manual)
     pid = supervisor_pid()
     if not pid:
+        if launchd_stop:
+            return {
+                "ok": bool(launchd_stop.get("ok")),
+                "stopped": bool(launchd_stop.get("actions")),
+                "reason": "launchd" if launchd_stop.get("actions") else "no pid file",
+                "manual": manual,
+                "launchd": launchd_stop,
+            }
         return {"ok": True, "stopped": False, "reason": "no pid file", "manual": manual}
     if not _pid_running(pid):
         pid_path().unlink(missing_ok=True)
-        return {"ok": True, "stopped": False, "reason": "process not running", "manual": manual}
+        return {"ok": True, "stopped": bool(launchd_stop and launchd_stop.get("actions")), "reason": "process not running", "manual": manual, "launchd": launchd_stop}
     try:
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
         else:
             os.kill(pid, signal.SIGTERM)
         pid_path().unlink(missing_ok=True)
-        return {"ok": True, "stopped": True, "pid": pid, "manual": manual}
+        return {"ok": True, "stopped": True, "pid": pid, "manual": manual, "launchd": launchd_stop}
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "pid": pid, "manual": manual}
+        return {"ok": False, "error": str(exc), "pid": pid, "manual": manual, "launchd": launchd_stop}
 
 
 def status(*, live: bool = False) -> dict[str, Any]:
@@ -1708,6 +2058,11 @@ def status(*, live: bool = False) -> dict[str, Any]:
     max_concurrent_sessions = normalize_max_concurrent_sessions(
         agent.get("maxConcurrentWakeJobs") if agent else None
     )
+    supervisor_service = _launchd_service_status()
+    supervisor_pid_value = supervisor_pid()
+    if not supervisor_pid_value and supervisor_service.get("running") and supervisor_service.get("pid"):
+        supervisor_pid_value = supervisor_service.get("pid")
+    runtime_info = agenttalk_runtime_info()
     return {
         "ok": True,
         "plugin": PLUGIN_ID,
@@ -1775,7 +2130,8 @@ def status(*, live: bool = False) -> dict[str, Any]:
             "error": "AgentTalk CLI is not installed",
         },
         "supervisorRunning": supervisor_running(),
-        "supervisorPid": supervisor_pid(),
+        "supervisorPid": supervisor_pid_value,
+        "supervisorService": supervisor_service,
         "supervisorManualStop": supervisor_manually_stopped(),
         "supervisorAutoStart": supervisor_autostart,
         "agent": {
@@ -1795,6 +2151,10 @@ def status(*, live: bool = False) -> dict[str, Any]:
         "agenttalkCli": agenttalk_command(),
         "agenttalkCliManagedPath": str(managed_agenttalk_bin()),
         "agenttalkCliInstalled": bool(agenttalk_command()),
+        "agenttalkRuntime": runtime_info,
+        "agenttalkCliVersion": runtime_info.get("packageVersion"),
+        "agenttalkNodeVersion": runtime_info.get("nodeVersion"),
+        "agenttalkNodeOk": runtime_info.get("nodeOk"),
         "configPath": str(supervisor_config_path()),
     }
 
@@ -1806,11 +2166,12 @@ def doctor() -> dict[str, Any]:
     repo = Path(agent["repoPath"]) if agent and agent.get("repoPath") else None
     checks = [
         {"name": "agenttalk_cli", "ok": bool(agenttalk_command())},
+        {"name": "node_22_plus", "ok": bool(current.get("agenttalkNodeOk"))},
         {"name": "config", "ok": current["configured"]},
         {"name": "hermes_repo", "ok": bool(repo and (repo / "hermes").exists())},
         {"name": "wake_default_off", "ok": current["wakeEnabled"] is False or current["agentEnabled"] is True},
     ]
-    supervisor = _run_agenttalk(["supervisor", "doctor", "--json"]) if agenttalk_command() else None
+    supervisor = _run_agenttalk(["supervisor", "doctor", "--json"], timeout=60) if agenttalk_command() else None
     return {
         **current,
         "checks": checks,
